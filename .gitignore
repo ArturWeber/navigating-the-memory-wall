@@ -205,3 +205,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# =========================
+# Custom Hardware Artifacts
+# =========================
+# Ignore generated Golden Model data files
+input.txt
+weights_int8.txt
+output.txt
+M_int.txt
+config.txt
