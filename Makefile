@@ -5,10 +5,10 @@ VCS_FLAGS ?= -sverilog -full64 -debug_access+all -l vcs.log
 PE_SV := pe_artur.sv
 TB_SV := tb_pe_artur.sv
 
-CIN ?= 1
-PEQ ?= 1
+CIN ?= 10
+PEQ ?= 6
 SEED ?= 1
-NIN ?= 1
+NIN ?= 50
 OUTDIR ?= vectors
 
 # expected outputs from generator (used as build artifacts)

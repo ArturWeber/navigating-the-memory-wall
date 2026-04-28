@@ -39,10 +39,14 @@ def golden_hw_int8(x_int8: torch.Tensor, w_int8: torch.Tensor, Mint: int) -> tor
     # x: (B, D), w: (O, D)
     x = x_int8.to(torch.int32)
     w = w_int8.to(torch.int32)
-    acc = x @ w.t()  # (B, O)
+    acc = x @ w.t()  # (B, O) int32
+
+    # IMPORTANT: upcast before multiplying by Mint (Q32)
+    acc64 = acc.to(torch.int64)
     rounding = 1 << (PRECISION_N - 1)
-    y = (acc * int(Mint) + rounding) >> PRECISION_N
-    return clip_int8(y)
+
+    y = (acc64 * int(Mint) + rounding) >> PRECISION_N
+    return torch.clamp(y, -128, 127).to(torch.int8)
 
 def pack_to_folds(vec_int8: torch.Tensor, simd: int, computing_qnt: int):
     # vec_int8: (D,)
