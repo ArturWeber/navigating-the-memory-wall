@@ -1,9 +1,0 @@
-cin 1
-kx 3
-ky 3
-dot_len 9
-simd 64
-computing_qnt 1
-weights_qnt 1
-pe_qnt 1
-Mint 10612706
