@@ -6,6 +6,7 @@ import brevitas.nn as qnn
 from brevitas.quant import Int8ActPerTensorFixedPoint
 
 PRECISION_N = 32
+USE_RELU = True  # Set to True for ReLU, False for Identity
 
 def seed_all(seed: int):
     random.seed(seed)
@@ -35,18 +36,18 @@ class GoldenLinear(nn.Module):
 def clip_int8(x: torch.Tensor) -> torch.Tensor:
     return torch.clamp(x, -128, 127).to(torch.int8)
 
-def golden_hw_int8(x_int8: torch.Tensor, w_int8: torch.Tensor, Mint: int) -> torch.Tensor:
-    # x: (B, D), w: (O, D)
+def golden_hw_int8(x_int8, w_int8, Mint, use_relu=True):
     x = x_int8.to(torch.int32)
     w = w_int8.to(torch.int32)
-    acc = x @ w.t()  # (B, O) int32
-
-    # IMPORTANT: upcast before multiplying by Mint (Q32)
+    acc = x @ w.t()
     acc64 = acc.to(torch.int64)
     rounding = 1 << (PRECISION_N - 1)
-
     y = (acc64 * int(Mint) + rounding) >> PRECISION_N
-    return torch.clamp(y, -128, 127).to(torch.int8)
+    if use_relu:
+        y = torch.clamp(y, 0, 127)
+    else:
+        y = torch.clamp(y, -128, 127)
+    return y.to(torch.int8)
 
 def pack_to_folds(vec_int8: torch.Tensor, simd: int, computing_qnt: int):
     # vec_int8: (D,)
@@ -103,7 +104,7 @@ def main():
     Mint = int(round(M * (1 << PRECISION_N)))
 
     # Golden int8 matching RTL integer requant
-    y_hw = golden_hw_int8(x_int8, w_int8, Mint)  # (B, pe_qnt)
+    y_hw = golden_hw_int8(x_int8, w_int8, Mint, use_relu=USE_RELU)
 
     os.makedirs(args.out_dir, exist_ok=True)
     weights_path = os.path.join(args.out_dir, "weights.txt")
@@ -122,6 +123,7 @@ def main():
         f.write(f"weights_qnt {computing_qnt}\n")
         f.write(f"pe_qnt {args.pe_qnt}\n")
         f.write(f"Mint {Mint}\n")
+        f.write(f"act_fun {1 if USE_RELU else 0}\n")
 
     # Write weights.txt
     with open(weights_path, "w") as f:

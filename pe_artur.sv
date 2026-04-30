@@ -2,8 +2,6 @@
 
 module pe #
 (
-        parameter byte unsigned      MAX_CMP_QNT=8,                                     //maximum computing quantity, control how many times the computation will be done with for the same PE_out, each computation will do SIMDs multiplications and sums and will acumulate till the number specief is given. Basically, this is the maximum number of folds.
-        parameter shortint unsigned  MAX_WGT_QNT=8,                                     //maximum weight quantity, define how many times the input data will be consumed as a weight in the writing state
         parameter byte unsigned      DATA_WIDTH=8,
         parameter shortint           MAX_VAL = (1 <<< (DATA_WIDTH-1)) - 1,              //maximum output value based on data width. Used to clip the accumulator output when scaling values
         parameter shortint           MIN_VAL = -(1 <<< (DATA_WIDTH-1)),                 //minimum output value based on data width. Used to clip the accumulator output when scaling values
@@ -14,8 +12,12 @@ module pe #
         parameter byte unsigned      NUM_ACTS_FUN=2,                                    //Number of implemented activation functions: Identity, ReLU, ReLU6 , LeakyReLU
         parameter shortint unsigned  SIMD=64,                                           //Number of SIMDs
         parameter shortint unsigned  PE=16,                                             //Number of PEs, i.e, outputs
-        parameter shortint unsigned  MAX_INPUT_DIM=16*3*3*DATA_WIDTH,                   //MAX_CHANNEL * KERNEL_X * KERNEL_Y, must be at least SIMD size and also a multiple of SIMD!!
-        parameter shortint unsigned  MAX_OUTPUT_DIM=16*DATA_WIDTH                       //MAX_CHANNEL * DATA_WIDTH
+        parameter shortint unsigned  MAX_CHANNELS = 16,                                  //Maximum number of input channels
+        parameter shortint unsigned  KERNEL_X = 3,                                       
+        parameter shortint unsigned  KERNEL_Y = 3,                            
+        parameter shortint unsigned  MAX_INPUT_DIM = MAX_CHANNELS*KERNEL_X*KERNEL_Y*DATA_WIDTH,  //MAX_CHANNEL * KERNEL_X * KERNEL_Y, must be at least SIMD size and also a multiple of SIMD!!
+        parameter shortint unsigned  MAX_OUTPUT_DIM = PE*DATA_WIDTH,                       //MAX_CHANNEL * DATA_WIDTH
+        parameter byte unsigned      MAX_FOLDS = (MAX_INPUT_DIM + (SIMD * DATA_WIDTH) - 1) / (SIMD * DATA_WIDTH)                                   //maximum ammount of folds, control how many times the computation/weight reading will be done with for the same PE_out, each computation will do SIMDs multiplications and sums and will acumulate till the number specief is given. Basically, this is the maximum number of folds
     )
     (
         //===========================DEBUG===========================
@@ -31,22 +33,22 @@ module pe #
         output logic [PE*DATA_WIDTH-1:0]                                       check_output_PE,
         output logic [MAX_INPUT_DIM-1:0]                                       check_input,
         output logic [SIMD*DATA_WIDTH-1:0]                                     check_input_part,
-        // output logic [2*DATA_WIDTH+$clog2(SIMD)-1:0]                           check_out_add,
+        // output logic [2*DATA_WIDTH+$clog2(SIMD)-1:0]                        check_out_add,
         output logic [ACC_BIT_WIDTH-1:0]                                       check_out_acc,
         output logic signed [TEMP_DATA_WIDTH-1:0]                              check_out_temp,
         //===========================DEBUG===========================
         //===========================INPUTS===========================
         input   logic                                                          rst_n,
         input   logic                                                          clk,
-        input   logic                                                          set_cfg,
-        input   logic   [$clog2(NUM_ACTS_FUN):0]                               act_fun,
+        input   logic                                                          set_cfg_n,
+        input logic [((NUM_ACTS_FUN <= 1) ? 1 : $clog2(NUM_ACTS_FUN))-1:0]     act_fun,
         input   logic                                                          wr_en,
         input   logic                                                          str_wr,
         input   logic                                                          inp_rd,
         input   logic   [MAX_INPUT_DIM-1:0]                                    inp_data,
-        input   logic   [$clog2(MAX_CMP_QNT):0]                                computing_qnt,
-        input   logic   [$clog2(MAX_WGT_QNT):0]                                weights_qnt,
-        input   logic   [$clog2(PE):0]                                         pe_qnt,
+        input logic [$clog2(MAX_FOLDS+1)-1:0]                                  computing_qnt,
+        input logic [$clog2(MAX_FOLDS+1)-1:0]                                  weights_qnt,
+        input logic [$clog2(PE+1)-1:0]                                         pe_qnt,
         //===========================OUTPUTS===========================
         output  logic   [MAX_OUTPUT_DIM-1:0]                                   out,
         output  logic                                                          output_ready,
@@ -58,22 +60,26 @@ module pe #
     logic [PE*DATA_WIDTH-1:0]                                                  out_PE;
     logic signed [TEMP_DATA_WIDTH-1:0]                                         out_temp;
     logic [MAX_INPUT_DIM-1:0]                                                  weights  [PE-1:0];
-    //logic signed [M_INT_PRECISION-1:0]                                         scales   [PE-1:0];
+    //logic signed [M_INT_PRECISION-1:0]                                       scales   [PE-1:0];
     logic signed [M_INT_PRECISION-1:0]                                         scales;
     logic [MAX_INPUT_DIM-1:0]                                                  inp_data_reg;
     logic signed [ACC_BIT_WIDTH-1:0]                                           out_acc;
     logic                                                                      write_complete;
     logic                                                                      computing_complete;
     
-    logic [$clog2(MAX_WGT_QNT+1):0]                                            read_posx;
-    logic [$clog2(PE):0]                                                       read_posy;
-    logic [$clog2(MAX_WGT_QNT+1):0]                                            weights_ind;
-    logic [$clog2(PE):0]                                                       PE_ind;
+    logic [$clog2(MAX_FOLDS+2)-1:0]                                            read_posx;
+    logic [$clog2(PE+1)-1:0]                                                   read_posy;
+    localparam int unsigned                                                    W_FOLD_IDX = (MAX_FOLDS <= 1) ? 1 : $clog2(MAX_FOLDS);
+    logic [W_FOLD_IDX-1:0]                                                     weights_ind;
+    localparam int unsigned                                                    W_PE_IDX = (PE <= 1) ? 1 : $clog2(PE);
+    logic [W_PE_IDX-1:0]                                                       PE_ind;
 
-    logic [$clog2(MAX_WGT_QNT):0]                                              weights_qnt_reg;
-    logic [$clog2(PE):0]                                                       pe_qnt_reg;
-    logic [$clog2(MAX_CMP_QNT):0]                                              computing_qnt_reg;
-    logic [$clog2(NUM_ACTS_FUN):0]                                             act_fun_reg;
+    logic [$clog2(MAX_FOLDS+2)-1:0]                                            weights_qnt_reg;
+    logic [$clog2(PE+1)-1:0]                                                   pe_qnt_reg;
+    logic [$clog2(MAX_FOLDS+1)-1:0]                                            computing_qnt_reg;
+    localparam int unsigned                                                    W_ACT = (NUM_ACTS_FUN <= 1) ? 1 : $clog2(NUM_ACTS_FUN);
+    logic [$clog2(W_ACT)-1:0]                                                  act_fun_reg;
+
     
     always_comb begin : state_change_logic
         case(state)
@@ -131,16 +137,16 @@ module pe #
             out <= '0;
             out_PE <= '0;
             out_acc <= '0;
-            weights_ind <= 0;
-            PE_ind <= 0;
-            read_posx <= 0;
-            read_posy <= 0;
-            scales <= 'b0;
+            weights_ind <= '0;
+            PE_ind <= '0;
+            read_posx <= '0;
+            read_posy <= '0;
+            scales <= '0;
             for (int unsigned PE_indx = 0; PE_indx < PE; PE_indx++) begin
-                weights[PE_indx] <= 'b0;  
+                weights[PE_indx] <= '0;  
             end;
         end
-        else if (!set_cfg) begin // set input values into register
+        else if (!set_cfg_n) begin // set input values into register
             weights_qnt_reg <= weights_qnt + 1;
             pe_qnt_reg <= pe_qnt;
             computing_qnt_reg <= computing_qnt;
@@ -150,28 +156,38 @@ module pe #
             case(state)
                 //==============WRITING STATE==============
                 writing: begin
+                    logic [$bits(read_posx)-1:0] read_posx_next;
+                    logic [$bits(read_posy)-1:0] read_posy_next;
                     out <= '0;
                     out_PE <= '0;
                     output_ready <= '0;
                     ready_to_receive <= '0;
-                    if(wr_en) begin
-                        if (~write_complete) begin
+
+                    if (wr_en) begin
+                        if (!write_complete) begin
                             //while still writing will asign the scale and weights to current matrix, posy x posx position
                             if (read_posx < (weights_qnt_reg - 1))
-                                weights[read_posy][(read_posx + 1) * SIMD * DATA_WIDTH - 1 -: SIMD * DATA_WIDTH] <= inp_data;
-                            else//Note: i am using only one scale per layer, but it's possible tu use one scale per filter too maybe
+                                weights[read_posy][(read_posx + 1) * SIMD * DATA_WIDTH - 1 -: SIMD * DATA_WIDTH] <= inp_data[SIMD*DATA_WIDTH-1:0];
+                            else//Note: i am using only one scale per layer, but it's possible to use one scale per filter too
                                 scales <= inp_data[M_INT_PRECISION - 1:0];
-                            read_posx++;//maybe change this later to use read_posx<=read_posx+1
-                        end
-                        if (read_posx == weights_qnt_reg) begin
+
+                            read_posx_next = read_posx + 1;
+                            read_posy_next = read_posy;
+
                             //when have alread read the exactly quantity of weights, will read for the next part, usually for the next filter/element(PE_OUT)
-                            read_posy++;//maybe change this later to use read_posy<=read_posy+1
-                            read_posx <= 0;
-                            if (read_posy == pe_qnt_reg) begin
+                            if (read_posx_next == weights_qnt_reg) begin
+                                read_posy_next = read_posy + 1;
+                                read_posx_next = '0;
+
                                 //when read the quantity of PEs necessary to computes all filters/elements will asign write_complete and goes to ready state
-                                write_complete <= '1;
-                                read_posy <= 0;
+                                if (read_posy_next == pe_qnt_reg) begin
+                                    write_complete <= '1;
+                                    read_posy_next = '0;
+                                end
                             end
+
+                            read_posx <= read_posx_next;
+                            read_posy <= read_posy_next;
                         end
                     end
                 end

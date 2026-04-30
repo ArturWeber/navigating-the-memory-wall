@@ -7,7 +7,7 @@ TB_SV := tb_pe_artur.sv
 
 CIN ?= 10
 PEQ ?= 6
-SEED ?= 1
+SEED ?= 3
 NIN ?= 50
 OUTDIR ?= vectors
 
