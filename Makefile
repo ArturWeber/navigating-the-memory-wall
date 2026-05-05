@@ -7,7 +7,8 @@ TB_SV := tb_pe_artur.sv
 
 CIN ?= 10
 PEQ ?= 6
-SEED ?= 3
+
+SEED ?= 5
 NIN ?= 50
 OUTDIR ?= vectors
 
@@ -34,7 +35,7 @@ $(SIMV): $(PE_SV) $(TB_SV)
 	$(VCS) $(VCS_FLAGS) $(PE_SV) $(TB_SV) -o $(SIMV)
 
 run: vectors build
-	./$(SIMV) +VEC_DIR=$(OUTDIR) +CIN=$(CIN) +PEQ=$(PEQ) +NIN=$(NIN) | tee sim.log
+	./$(SIMV) +VEC_DIR=$(OUTDIR) +CIN=$(CIN) +PEQ_INT=$(PEQ) +NIN=$(NIN) | tee sim.log
 
 clean:
 	rm -rf $(SIMV) csrc simv.daidir ucli.key *.vpd *.log $(OUTDIR) sim.log vcs.log

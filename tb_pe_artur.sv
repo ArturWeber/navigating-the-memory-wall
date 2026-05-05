@@ -17,7 +17,7 @@ module tb_pe;
   parameter longint signed     PRECISION_CORRECTION = 1 << (M_INT_PRECISION-1);
   parameter byte unsigned      TEMP_DATA_WIDTH = ACC_BIT_WIDTH + M_INT_PRECISION + 1;
 
-  parameter byte unsigned      NUM_ACTS_FUN    = 1;
+  parameter byte unsigned      NUM_ACTS_FUN    = 2;
   parameter int unsigned       ACT_FUN_SEL     = 1;
 
   localparam int unsigned      W_ACT = (NUM_ACTS_FUN <= 1) ? 1 : $clog2(NUM_ACTS_FUN);
@@ -48,7 +48,7 @@ module tb_pe;
   string VEC_DIR = ".";
 
   int DOT_LEN;
-  int COMPUTING_QNT_INT;
+  int FOLD_QNT_INT;
 
   // -------------------------------
   // DUT inputs
@@ -62,8 +62,7 @@ module tb_pe;
   logic inp_rd;
   logic [MAX_INPUT_DIM-1:0] inp_data;
 
-  logic [$clog2(256)-1:0] computing_qnt;
-  logic [$clog2(256)-1:0] weights_qnt;
+  logic [$clog2(256)-1:0] fold_qnt;
   logic [$clog2(PE+1)-1:0] pe_qnt;
 
   // DUT outputs
@@ -143,8 +142,7 @@ module tb_pe;
     .str_wr(str_wr),
     .inp_rd(inp_rd),
     .inp_data(inp_data),
-    .computing_qnt(computing_qnt),
-    .weights_qnt(weights_qnt),
+    .fold_qnt(fold_qnt),
     .pe_qnt(pe_qnt),
     .out(out),
     .output_ready(output_ready),
@@ -166,12 +164,12 @@ module tb_pe;
 
     $display("\n[TB] Loading weights from %s", path);
 
-    wait (check_state == 1);
-    @(posedge clk);
+    // Keep wr_en asserted to stream at 1 beat per cycle
+    wr_en = 1;
 
-    // FIX 4: loop uses weights_qnt directly (RTL adds 1 internally via weights_qnt_reg <= weights_qnt + 1)
+    // Stream folds for all PEs
     for (int p = 0; p < pe_qnt; p++) begin
-      for (int fold = 0; fold < weights_qnt; fold++) begin
+      for (int fold = 0; fold < fold_qnt; fold++) begin
 
         for (int s = 0; s < SIMD; s++) begin
           r = $fscanf(weight_file, "%d", simd_vals[s]);
@@ -186,39 +184,33 @@ module tb_pe;
           inp_data[s*DATA_WIDTH +: DATA_WIDTH] = simd_vals[s][DATA_WIDTH-1:0];
         end
 
-        str_wr = 1;
-        wr_en  = 1;
-        @(posedge clk);
-        wr_en  = 0;
-        str_wr = 0;
         @(posedge clk);
       end
 
-      r = $fscanf(weight_file, "%d", scale_val);
-      if (r != 1) begin
-        $display("ERROR: missing scale line for output p=%0d", p);
-        $fatal(1);
+      if (p == pe_qnt - 1) begin
+        $write("[TB] Last loaded weight fold first 12 lanes: ");
+        for (int i = 0; i < 12; i++) begin
+          $write("%0d ", simd_vals[i]);
+        end
+        $write("\n");
       end
-
-      $display("[TB] Loaded scale(Mint) for p=%0d = %0d (0x%0h)", p, scale_val, scale_val);
-
-      $write("[TB] Last loaded weight fold first 12 lanes: ");
-      for (int i = 0; i < 12; i++) begin
-        $write("%0d ", simd_vals[i]);
-      end
-      $write("\n");
-
-      inp_data = '0;
-      inp_data[M_INT_PRECISION-1:0] = scale_val[M_INT_PRECISION-1:0];
-
-      str_wr = 1;
-      wr_en  = 1;
-      @(posedge clk);
-      wr_en  = 0;
-      str_wr = 0;
-      @(posedge clk);
     end
 
+    // Final Mint (one per layer), read and send exactly once after all weights
+    r = $fscanf(weight_file, "%d", scale_val);
+    if (r != 1) begin
+      $display("ERROR: missing final Mint line (one per layer)");
+      $fatal(1);
+    end
+
+    $display("[TB] Loaded layer scale(Mint) = %0d (0x%0h)", scale_val, scale_val);
+
+    inp_data = '0;
+    inp_data[M_INT_PRECISION-1:0] = scale_val[M_INT_PRECISION-1:0];
+    
+    @(posedge clk);
+
+    wr_en = 0; // Deassert when done
     $fclose(weight_file);
     $display("[TB] Weights loaded.\n");
   end
@@ -248,13 +240,9 @@ module tb_pe;
 
     for (int t = 0; t < nin; t++) begin
 
-      // FIX 2: wait for ready BEFORE loading inp_data
-      wait (ready_to_receive == 1);
-      @(posedge clk);
-
-      // pack full inp_data across folds
+      // Pack full inp_data across folds *before* waiting
       inp_data = '0;
-      for (int fold = 0; fold < computing_qnt; fold++) begin
+      for (int fold = 0; fold < fold_qnt; fold++) begin
         for (int s = 0; s < SIMD; s++) begin
           r = $fscanf(input_file, "%d", simd_vals[s]);
           if (r != 1) begin
@@ -268,16 +256,16 @@ module tb_pe;
         end
       end
 
-      // wait again then pulse inp_rd
-      wait (ready_to_receive == 1);
-      @(posedge clk);
+      // Single synchronization point
+      do @(posedge clk); while (ready_to_receive !== 1);
+      
       inp_rd <= 1;
 
       @(posedge clk);
       inp_rd <= 0;
 
-      wait (output_ready == 1);
-      @(posedge clk);
+      // Wait for a clock edge where output_ready is high
+      do @(posedge clk); while (output_ready !== 1);
 
       $write("[TB] Latched input first 16 lanes: ");
       for (int i=0; i<16; i++) begin
@@ -303,8 +291,8 @@ module tb_pe;
           $display("DUT out = %0d (0x%0h)", $signed(dut_val), dut_val);
           $display("EXP out = %0d", exp_vals[p]);
           $display("Raw out bus = 0x%0h", out);
-          $display("cfg: CIN=%0d KX=%0d KY=%0d DOT_LEN=%0d SIMD=%0d computing_qnt=%0d pe_qnt=%0d act_fun=%0d",
-                   CIN, KX, KY, DOT_LEN, SIMD, computing_qnt, pe_qnt, act_fun);
+          $display("cfg: CIN=%0d KX=%0d KY=%0d DOT_LEN=%0d SIMD=%0d fold_qnt=%0d pe_qnt=%0d act_fun=%0d",
+                   CIN, KX, KY, DOT_LEN, SIMD, fold_qnt, pe_qnt, act_fun);
           $display("state=%0d weight_ind=%0d PE_ind=%0d out_acc=%0d out_temp=%0d",
                    check_state, check_weight_ind, check_PE_ind, $signed(check_out_acc), $signed(check_out_temp));
           $display("==============\n");
@@ -333,39 +321,51 @@ module tb_pe;
     void'($value$plusargs("VEC_DIR=%s", VEC_DIR));
 
     DOT_LEN = CIN * KX * KY;
-    COMPUTING_QNT_INT = ceil_div(DOT_LEN, SIMD);
+    FOLD_QNT_INT = ceil_div(DOT_LEN, SIMD);
 
-    // FIX 4: weights_qnt = COMPUTING_QNT_INT (RTL adds 1 internally)
-    computing_qnt <= COMPUTING_QNT_INT[$bits(computing_qnt)-1:0];
-    weights_qnt   <= COMPUTING_QNT_INT[$bits(weights_qnt)-1:0];
-    pe_qnt        <= PEQ_INT[$bits(pe_qnt)-1:0];
-    act_fun       <= ACT_FUN_SEL[W_ACT-1:0];
+    fold_qnt <= FOLD_QNT_INT[$bits(fold_qnt)-1:0];
+    pe_qnt   <= PEQ_INT[$bits(pe_qnt)-1:0];
+    act_fun  <= ACT_FUN_SEL[W_ACT-1:0];
 
+    // Init signals
     wr_en     <= 0;
     str_wr    <= 0;
     inp_rd    <= 0;
-    set_cfg_n <= 0;
-    rst_n     <= 1;
+    rst_n     <= 0;
+    set_cfg_n <= 1; 
     clear_inp_data();
 
-    $display("[TB] CIN=%0d KX=%0d KY=%0d DOT_LEN=%0d SIMD=%0d => computing_qnt=%0d; pe_qnt=%0d; NIN=%0d; VEC_DIR=%s; ACT_FUN_SEL=%0d",
-             CIN, KX, KY, DOT_LEN, SIMD, COMPUTING_QNT_INT, PEQ_INT, NIN, VEC_DIR, ACT_FUN_SEL);
+    $display("[TB] CIN=%0d KX=%0d KY=%0d DOT_LEN=%0d SIMD=%0d => fold_qnt=%0d; pe_qnt=%0d; NIN=%0d; VEC_DIR=%s; ACT_FUN_SEL=%0d",
+            CIN, KX, KY, DOT_LEN, SIMD, FOLD_QNT_INT, PEQ_INT, NIN, VEC_DIR, ACT_FUN_SEL);
 
-    #5 set_cfg_n <= 1;
-    rst_n <= 0;
-    #5 rst_n <= 1;
-    #5;
+    // Apply config cleanly aligned to clocks
+    rst_n     <= 0;
+    set_cfg_n <= 0;
+    repeat (2) @(posedge clk);
+    rst_n     <= 1;
+    @(posedge clk);
+    set_cfg_n <= 1;
 
+    // Force DUT into writing state
     str_wr <= 1;
+    wait (check_state == 1); // Wait for FSM to enter 'writing'
+    @(posedge clk);
 
     weights_path  = {VEC_DIR, "/weights.txt"};
     inputs_path   = {VEC_DIR, "/inputs.txt"};
     expected_path = {VEC_DIR, "/expected.txt"};
 
     load_weights_from_file(weights_path);
-    str_wr = 0;
 
-    // FIX 3: no wait(check_state==2), run_and_check handles sync via ready_to_receive
+    // Wait until DUT says weights are complete before dropping str_wr
+    wait (check_write_complete == 1);
+    @(posedge clk);
+    str_wr <= 0;
+    
+    // Optional but safe: wait for DUT to transition to 'ready' state
+    wait (check_state == 2);
+    @(posedge clk);
+
     run_and_check(inputs_path, expected_path, NIN);
 
     $finish;

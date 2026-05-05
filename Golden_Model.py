@@ -6,7 +6,7 @@ import brevitas.nn as qnn
 from brevitas.quant import Int8ActPerTensorFixedPoint
 
 PRECISION_N = 32
-USE_RELU = True  # Set to True for ReLU, False for Identity
+USE_RELU = True  # True for ReLU, False for Identity
 
 def seed_all(seed: int):
     random.seed(seed)
@@ -57,8 +57,7 @@ def pack_to_folds(vec_int8: torch.Tensor, simd: int, computing_qnt: int):
         raise ValueError(f"D={D} > simd*computing_qnt={total}")
     padded = torch.zeros(total, dtype=torch.int8)
     padded[:D] = vec_int8
-    folds = padded.view(computing_qnt, simd)  # (F, SIMD)
-    return folds
+    return padded.view(computing_qnt, simd)  # (F, SIMD)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -67,7 +66,7 @@ def main():
     ap.add_argument("--cin", type=int, default=16)           # input channels (<=16 per your current PE)
     ap.add_argument("--kx", type=int, default=3)
     ap.add_argument("--ky", type=int, default=3)
-    ap.add_argument("--pe_qnt", type=int, default=6)
+    ap.add_argument("--pe_qnt", type=int, default=16)
     ap.add_argument("--simd", type=int, default=64)
     ap.add_argument("--n_inputs", type=int, default=10)
     ap.add_argument("--out_dir", default="vectors")
@@ -96,7 +95,7 @@ def main():
     if w_scale.numel() != 1:
         raise RuntimeError(
             f"Per-channel weight scale detected (numel={w_scale.numel()}). "
-            "Your RTL uses one scale per layer; configure Brevitas for per-tensor weight scale."
+            "RTL uses one scale per layer; configure Brevitas for per-tensor weight scale."
         )
     s_w = float(w_scale.item())
 
@@ -125,13 +124,16 @@ def main():
         f.write(f"Mint {Mint}\n")
         f.write(f"act_fun {1 if USE_RELU else 0}\n")
 
-    # Write weights.txt
+    # weights.txt format (ONE Mint per layer):
+    # for p in 0..pe_qnt-1:
+    #   for fold in 0..computing_qnt-1: SIMD ints
+    # then final line: Mint
     with open(weights_path, "w") as f:
         for p in range(args.pe_qnt):
             folds = pack_to_folds(w_int8[p], args.simd, computing_qnt)
             for fold in range(computing_qnt):
                 f.write(" ".join(str(int(v)) for v in folds[fold].tolist()) + "\n")
-            f.write(str(int(Mint)) + "\n")
+        f.write(str(int(Mint)) + "\n")
 
     # Write inputs.txt: each input is computing_qnt lines of SIMD ints
     with open(inputs_path, "w") as f:
@@ -149,6 +151,7 @@ def main():
     print(f"  dot_len={dot_len}, computing_qnt={computing_qnt}, pe_qnt={args.pe_qnt}")
     print(f"  scales: s_in={s_in}, s_w={s_w}, s_out={s_out}")
     print(f"  M={M}, Mint(Q32)={Mint}")
+    print(f"  USE_RELU={USE_RELU}")
 
 if __name__ == "__main__":
     main()
