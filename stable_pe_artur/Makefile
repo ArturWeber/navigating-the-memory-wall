@@ -4,30 +4,13 @@ VCS_FLAGS ?= -sverilog -full64 -debug_access+all -l vcs.log
 
 PE_SV := pe_artur.sv
 TB_SV := tb_pe_artur.sv
-OUTDIR ?= vectors
 
-#Software parameters
 CIN ?= 10
-PEQNT ?= 6
-#KX 
-#KY 
+PEQ ?= 6
 
-#Hardware parameters attached to software
-#SIMD ?=
-
-#Hardware parameters
-##PE
-##MAX_CHANNELS
-##KERNEL_X
-##KERNEL_Y
-##FCLK 
-
-
-#Testing parameters
 SEED ?= 5
-NIN ?= 1000000
-#BW
-#L 
+NIN ?= 200
+OUTDIR ?= vectors
 
 # expected outputs from generator (used as build artifacts)
 WEIGHTS_FILE  := $(OUTDIR)/weights.txt
@@ -43,7 +26,7 @@ vectors: $(WEIGHTS_FILE) $(INPUTS_FILE) $(EXPECTED_FILE)
 
 $(WEIGHTS_FILE) $(INPUTS_FILE) $(EXPECTED_FILE): Golden_Model.py
 	python3 Golden_Model.py \
-		--cin $(CIN) --pe_qnt $(PEQNT) --seed $(SEED) --n_inputs $(NIN) --out_dir $(OUTDIR)
+		--cin $(CIN) --pe_qnt $(PEQ) --seed $(SEED) --n_inputs $(NIN) --out_dir $(OUTDIR)
 
 # Build simv only if RTL/TB changed
 build: $(SIMV)
@@ -52,7 +35,7 @@ $(SIMV): $(PE_SV) $(TB_SV)
 	$(VCS) $(VCS_FLAGS) $(PE_SV) $(TB_SV) -o $(SIMV)
 
 run: vectors build
-	./$(SIMV) +VEC_DIR=$(OUTDIR) +CIN=$(CIN) +PEQNT=$(PEQNT) +NIN=$(NIN) | tee sim.log
+	./$(SIMV) +VEC_DIR=$(OUTDIR) +CIN=$(CIN) +PEQ_INT=$(PEQ) +NIN=$(NIN) | tee sim.log
 
 clean:
 	rm -rf $(SIMV) csrc simv.daidir ucli.key *.vpd *.log $(OUTDIR) sim.log vcs.log
