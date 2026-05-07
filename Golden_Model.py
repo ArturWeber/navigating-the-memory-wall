@@ -49,15 +49,14 @@ def golden_hw_int8(x_int8, w_int8, Mint, use_relu=True):
         y = torch.clamp(y, -128, 127)
     return y.to(torch.int8)
 
-def pack_to_folds(vec_int8: torch.Tensor, simd: int, computing_qnt: int):
-    # vec_int8: (D,)
+def pack_to_folds(vec_int8: torch.Tensor, simd: int, fold_qnt: int):
     D = vec_int8.numel()
-    total = simd * computing_qnt
+    total = simd * fold_qnt
     if D > total:
-        raise ValueError(f"D={D} > simd*computing_qnt={total}")
+        raise ValueError(f"D={D} > simd*fold_qnt={total}")
     padded = torch.zeros(total, dtype=torch.int8)
     padded[:D] = vec_int8
-    return padded.view(computing_qnt, simd)  # (F, SIMD)
+    return padded.view(fold_qnt, simd)  # (F, SIMD)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -68,14 +67,14 @@ def main():
     ap.add_argument("--ky", type=int, default=3)
     ap.add_argument("--pe_qnt", type=int, default=16)
     ap.add_argument("--simd", type=int, default=64)
-    ap.add_argument("--n_inputs", type=int, default=200)
+    ap.add_argument("--n_inputs", type=int, default=1000)
     ap.add_argument("--out_dir", default="vectors")
     args = ap.parse_args()
 
     seed_all(args.seed)
 
     dot_len = args.cin * args.kx * args.ky
-    computing_qnt = math.ceil(dot_len / args.simd)
+    fold_qnt = math.ceil(dot_len / args.simd)
 
     model = GoldenLinear(dot_len, args.pe_qnt, args.bit_width).eval()
 
@@ -111,44 +110,42 @@ def main():
     exp_path     = os.path.join(args.out_dir, "expected.txt")
     cfg_path     = os.path.join(args.out_dir, "cfg.txt")
 
-    # Write cfg (TB can read plusargs or this file)
     with open(cfg_path, "w") as f:
         f.write(f"cin {args.cin}\n")
         f.write(f"kx {args.kx}\n")
         f.write(f"ky {args.ky}\n")
         f.write(f"dot_len {dot_len}\n")
         f.write(f"simd {args.simd}\n")
-        f.write(f"computing_qnt {computing_qnt}\n")
-        f.write(f"weights_qnt {computing_qnt}\n")
+        f.write(f"fold_qnt {fold_qnt}\n")
         f.write(f"pe_qnt {args.pe_qnt}\n")
         f.write(f"Mint {Mint}\n")
         f.write(f"act_fun {1 if USE_RELU else 0}\n")
 
     # weights.txt format (ONE Mint per layer):
     # for p in 0..pe_qnt-1:
-    #   for fold in 0..computing_qnt-1: SIMD ints
+    #   for fold in 0..fold_qnt-1: SIMD ints
     # then final line: Mint
     with open(weights_path, "w") as f:
         for p in range(args.pe_qnt):
-            folds = pack_to_folds(w_int8[p], args.simd, computing_qnt)
-            for fold in range(computing_qnt):
+            folds = pack_to_folds(w_int8[p], args.simd, fold_qnt)
+            for fold in range(fold_qnt):
                 f.write(" ".join(str(int(v)) for v in folds[fold].tolist()) + "\n")
         f.write(str(int(Mint)) + "\n")
 
-    # Write inputs.txt: each input is computing_qnt lines of SIMD ints
+    # inputs.txt: each input is fold_qnt lines of SIMD ints
     with open(inputs_path, "w") as f:
         for b in range(args.n_inputs):
-            folds = pack_to_folds(x_int8[b], args.simd, computing_qnt)
-            for fold in range(computing_qnt):
+            folds = pack_to_folds(x_int8[b], args.simd, fold_qnt)
+            for fold in range(fold_qnt):
                 f.write(" ".join(str(int(v)) for v in folds[fold].tolist()) + "\n")
 
-    # Write expected.txt: 1 line per input, pe_qnt ints
+    # expected.txt: 1 line per input, pe_qnt ints
     with open(exp_path, "w") as f:
         for b in range(args.n_inputs):
             f.write(" ".join(str(int(v)) for v in y_hw[b].tolist()) + "\n")
 
     print("Generated in:", args.out_dir)
-    print(f"  dot_len={dot_len}, computing_qnt={computing_qnt}, pe_qnt={args.pe_qnt}")
+    print(f"  dot_len={dot_len}, fold_qnt={fold_qnt}, pe_qnt={args.pe_qnt}, simd={args.simd}")
     print(f"  scales: s_in={s_in}, s_w={s_w}, s_out={s_out}")
     print(f"  M={M}, Mint(Q32)={Mint}")
     print(f"  USE_RELU={USE_RELU}")

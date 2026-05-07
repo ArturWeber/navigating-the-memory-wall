@@ -9,9 +9,6 @@ module tb_pe;
   parameter shortint unsigned  PE              = 16;
   parameter byte unsigned      DATA_WIDTH      = 8;
 
-  parameter int unsigned       MAX_INPUT_DIM   = 192 * DATA_WIDTH;
-  parameter int unsigned       MAX_OUTPUT_DIM  = PE * DATA_WIDTH;
-
   parameter byte unsigned      ACC_BIT_WIDTH   = 32;
   parameter byte unsigned      M_INT_PRECISION = 32;
   parameter longint signed     PRECISION_CORRECTION = 1 << (M_INT_PRECISION-1);
@@ -24,6 +21,16 @@ module tb_pe;
 
   parameter shortint           MAX_VAL = (1 <<< (DATA_WIDTH-1)) - 1;
   parameter shortint           MIN_VAL = -(1 <<< (DATA_WIDTH-1));
+
+  parameter shortint unsigned  MAX_CHANNELS = 16;
+  parameter shortint unsigned  KERNEL_X = 3;
+  parameter shortint unsigned  KERNEL_Y = 3;
+  parameter int unsigned       MAX_DOT_LANES = MAX_CHANNELS*KERNEL_X*KERNEL_Y;
+  parameter int unsigned       MAX_FOLDS = (MAX_DOT_LANES + SIMD - 1) / SIMD;
+
+  parameter int unsigned       PAD_LANES = MAX_FOLDS * SIMD;
+  parameter int unsigned       MAX_INPUT_DIM   = PAD_LANES * DATA_WIDTH;
+  parameter int unsigned       MAX_OUTPUT_DIM  = PE * DATA_WIDTH;
 
   // -------------------------------
   // File handles + paths (module scope)
@@ -43,12 +50,19 @@ module tb_pe;
   int CIN     = 16;
   int KX      = 3;
   int KY      = 3;
-  int NIN     = 10;
-  int PEQNT = 6;
+  int NIN     = 1000;
+  int PEQNT   = 16;
   string VEC_DIR = ".";
 
   int DOT_LEN;
   int FOLD_QNT_INT;
+
+  // -------------------------------
+  // Memory-model knobs (absolute time, then converted to cycles using FCLK)
+  // -------------------------------
+  real FCLK_HZ   = 1.0e9;     // accelerator frequency (Hz)
+  real MEM_B_GBPS = 30.0;     // bandwidth in GB/s (decimal, 1 GB = 1e9 bytes)
+  real MEM_L_S    = 2.0e-9;   // latency in seconds
 
   // -------------------------------
   // DUT inputs
@@ -62,7 +76,7 @@ module tb_pe;
   logic inp_rd;
   logic [MAX_INPUT_DIM-1:0] inp_data;
 
-  logic [$clog2(256)-1:0] fold_qnt;
+  logic [$clog2(MAX_FOLDS+1)-1:0] fold_qnt;
   logic [$clog2(PE+1)-1:0] pe_qnt;
 
   // DUT outputs
@@ -98,8 +112,21 @@ module tb_pe;
     inp_data = '0;
   endtask
 
-  function automatic int ceil_div(int a, int b);
+  function automatic int ceil_div_int(int a, int b);
     return (a + b - 1) / b;
+  endfunction
+
+  // ceil(x) for real -> int
+  function automatic int ceil_real_to_int(real x);
+    int xi;
+    xi = $rtoi(x);
+    if (x > xi) return xi + 1;
+    else return xi;
+  endfunction
+
+  // Convert seconds to cycles with ceil
+  function automatic int sec_to_cycles(real t_s, real f_hz);
+    return ceil_real_to_int(t_s * f_hz);
   endfunction
 
   // -------------------------------
@@ -150,7 +177,7 @@ module tb_pe;
   );
 
   // -------------------------------
-  // Load weights
+  // Load weights (no memory model here)
   // -------------------------------
   task automatic load_weights_from_file(string path);
     int simd_vals [SIMD];
@@ -186,17 +213,9 @@ module tb_pe;
 
         @(posedge clk);
       end
-
-      if (p == pe_qnt - 1) begin
-        $write("[TB] Last loaded weight fold first 12 lanes: ");
-        for (int i = 0; i < 12; i++) begin
-          $write("%0d ", simd_vals[i]);
-        end
-        $write("\n");
-      end
     end
 
-    // Final Mint (one per layer), read and send exactly once after all weights
+    // Final Mint (one per layer)
     r = $fscanf(weight_file, "%d", scale_val);
     if (r != 1) begin
       $display("ERROR: missing final Mint line (one per layer)");
@@ -207,7 +226,6 @@ module tb_pe;
 
     inp_data = '0;
     inp_data[M_INT_PRECISION-1:0] = scale_val[M_INT_PRECISION-1:0];
-    
     @(posedge clk);
 
     wr_en = 0; // Deassert when done
@@ -217,13 +235,29 @@ module tb_pe;
   endtask
 
   // -------------------------------
-  // Run + check
+  // Run + check + memory model
   // -------------------------------
   task automatic run_and_check(string in_path, string exp_path, int nin);
     int simd_vals [SIMD];
     int exp_vals  [PE];
     logic signed [DATA_WIDTH-1:0] dut_val;
+
+    // Timing counters
+    longint unsigned cycle_ctr;
+    longint unsigned start_cycle;
+    longint unsigned done_cycle;
+
+    // Memory model per input
+    int s_in_bytes;
+    real Tmem_s;
+    int Tmem_c;
+    int Tidle_c;
+    int Tcomp_c;
+    int Tcomp_prev_c;
+
   begin
+    Tcomp_prev_c = 0;
+
     input_file = $fopen(in_path, "r");
     if (input_file == 0) begin
       $display("ERROR: Could not open %s", in_path);
@@ -236,7 +270,23 @@ module tb_pe;
       $fatal(1);
     end
 
+    cycle_ctr = 0;
+
+    // Cycle counter (local to this task)
+    fork
+      begin
+        forever begin
+          @(posedge clk);
+          cycle_ctr++;
+        end
+      end
+    join_none
+
     $display("[TB] Running %0d inputs from %s, checking vs %s", nin, in_path, exp_path);
+    $display("[TB][MEM] FCLK_HZ=%0.3e MEM_L_S=%0.3e MEM_B_GBPS=%0.3f", FCLK_HZ, MEM_L_S, MEM_B_GBPS);
+
+    // bytes transferred per input (includes padding)
+    s_in_bytes = FOLD_QNT_INT * SIMD * (DATA_WIDTH/8);
 
     for (int t = 0; t < nin; t++) begin
 
@@ -256,25 +306,35 @@ module tb_pe;
         end
       end
 
-      // Single synchronization point
-      do @(posedge clk); while (ready_to_receive !== 1);
-      
-      inp_rd <= 1;
+      // --- Memory model (serialized): wait Tmem_c cycles before issuing inp_rd ---
+      // Tmem_s = L + s/B
+      Tmem_s = MEM_L_S + (real'(s_in_bytes) / (MEM_B_GBPS * 1.0e9));
+      Tmem_c = sec_to_cycles(Tmem_s, FCLK_HZ);
 
+      // wait until DUT ready
+      do @(posedge clk); while (ready_to_receive !== 1);
+
+      // Inject idle cycles to emulate memory fetch time (overlap version)
+      Tidle_c = (Tmem_c > Tcomp_prev_c) ? (Tmem_c - Tcomp_prev_c) : 0;
+      repeat (Tidle_c) @(posedge clk);
+
+      // Issue input
+      inp_rd <= 1;
+      start_cycle = cycle_ctr;
       @(posedge clk);
       inp_rd <= 0;
 
       // Wait for a clock edge where output_ready is high
       do @(posedge clk); while (output_ready !== 1);
+      done_cycle = cycle_ctr;
 
-      $write("[TB] Latched input first 16 lanes: ");
-      for (int i=0; i<16; i++) begin
-        logic signed [DATA_WIDTH-1:0] v;
-        v = check_input[i*DATA_WIDTH +: DATA_WIDTH];
-        $write("%0d ", $signed(v));
-      end
-      $write("\n");
+      Tcomp_c = int'(done_cycle - start_cycle);
+      Tcomp_prev_c = Tcomp_c;
 
+      $display("[TB][t=%0d] Tmem_c=%0d Tidle_c=%0d Tcomp_c=%0d s_in_bytes=%0d",
+               t, Tmem_c, Tidle_c, Tcomp_c, s_in_bytes);
+
+      // ---- Correctness check (unchanged) ----
       for (int p = 0; p < pe_qnt; p++) begin
         r = $fscanf(exp_file, "%d", exp_vals[p]);
         if (r != 1) begin
@@ -300,7 +360,6 @@ module tb_pe;
         end
       end
 
-      $display("[TB] PASS t=%0d", t);
     end
 
     $fclose(input_file);
@@ -320,8 +379,13 @@ module tb_pe;
     if (!$value$plusargs("PEQNT=%d", PEQNT)) PEQNT = 6;
     void'($value$plusargs("VEC_DIR=%s", VEC_DIR));
 
+    // Memory-model plusargs (all optional)
+    void'($value$plusargs("FCLK_HZ=%f", FCLK_HZ));
+    void'($value$plusargs("MEM_B_GBPS=%f", MEM_B_GBPS));
+    void'($value$plusargs("MEM_L_S=%f", MEM_L_S));
+
     DOT_LEN = CIN * KX * KY;
-    FOLD_QNT_INT = ceil_div(DOT_LEN, SIMD);
+    FOLD_QNT_INT = ceil_div_int(DOT_LEN, SIMD);
 
     fold_qnt <= FOLD_QNT_INT[$bits(fold_qnt)-1:0];
     pe_qnt   <= PEQNT[$bits(pe_qnt)-1:0];
@@ -332,7 +396,7 @@ module tb_pe;
     str_wr    <= 0;
     inp_rd    <= 0;
     rst_n     <= 0;
-    set_cfg_n <= 1; 
+    set_cfg_n <= 1;
     clear_inp_data();
 
     $display("[TB] CIN=%0d KX=%0d KY=%0d DOT_LEN=%0d SIMD=%0d => fold_qnt=%0d; pe_qnt=%0d; NIN=%0d; VEC_DIR=%s; ACT_FUN_SEL=%0d",
@@ -361,7 +425,7 @@ module tb_pe;
     wait (check_write_complete == 1);
     @(posedge clk);
     str_wr <= 0;
-    
+
     // Optional but safe: wait for DUT to transition to 'ready' state
     wait (check_state == 2);
     @(posedge clk);

@@ -2,6 +2,9 @@
 # Python
 # =========================
 
+# VScode settings
+.vscode/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -84,6 +87,12 @@ __pypackages__/
 # Generated vectors
 vectors/
 .vectors/
+work/
+.work/
+results/
+.results/
+.syn/
+syn/
 
 # VCS build/run artifacts
 csrc/
