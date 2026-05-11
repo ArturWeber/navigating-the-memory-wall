@@ -1,6 +1,11 @@
 VCS ?= vcs
-VCS_FLAGS ?= -sverilog -full64 -debug_access+all -l vcs.log
-SIMV ?= simv
+VCS_FLAGS ?= -sverilog -full64 \
+             -debug_access+all \
+             -debug_region+cell+lib \
+			 -l vcs.log
+
+DC_SHELL ?= dc_shell
+PT_SHELL ?= pt_shell
 
 PE_SV := pe_artur.sv
 TB_SV := tb_pe_artur.sv
@@ -9,94 +14,269 @@ TB_SV := tb_pe_artur.sv
 # IMPORTANT PARAMETERS
 # -------------------------------
 
+# Hardware parameters attached to software
+SIMD ?= 32
+DATA_WIDTH ?= 8
+
+# Hardware parameters
+PE           ?= 30
+MAX_CHANNELS ?= 30
+KERNEL_X     ?= 3
+KERNEL_Y     ?= 3
+#Below is the TARGET frequency used for synthesis/STA.
+FCLK_HZ      ?= 2e9
+
 # Software / workload parameters
-PEQNT ?= 16
+PEQNT ?= 10
 CIN   ?= 16
 KX    ?= 3
 KY    ?= 3
 
-# Hardware parameters attached to software
-SIMD ?= 64
-
-# Hardware parameters
-PE           ?= 16
-MAX_CHANNELS ?= 16
-KERNEL_X     ?= 3
-KERNEL_Y     ?= 3
-
 # Testing parameters
 SEED ?= 5
-NIN  ?= 5
+NIN  ?= 10
 
 # Memory model parameters
-FCLK_HZ    ?= 1e9
-USE_FCLK_SYNTH ?= False
-MEM_B_GBPS ?= 30.0
-MEM_L_S    ?= 2e-9
-DATA_WIDTH ?= 8
+USE_FCLK_SYNTH  ?= True
+MEM_B_GBPS      ?= 1
+MEM_L_S         ?= 2e-9
+
+# SAED14 library 
+SAED14_LIB_DB ?= $(HOME)/SAED_LIB/lib/stdcell_lvt/db_ccs/saed14lvt_tt0p8v25c.db
+
+# Synthesis target clock used by DC as starting point (PT reports actual slack/Fmax)
+CLK_PERIOD_NS := $(shell awk "BEGIN {printf \"%.2f\", 1e9 / $(FCLK_HZ)}")
 
 # -------------------------------
-# Unified Working Directory (Prevents Disk Bloat)
+# Directories & IDs
 # -------------------------------
-WORKDIR       := work
-SIMV_BIN      := $(WORKDIR)/simv
+WORKDIR      := work
+RESULTS_DIR  := results
+SYN_DIR      := syn
+
+SIMV_BIN     := $(WORKDIR)/simv
+CFG_SVH      := $(WORKDIR)/rtl_cfg.svh
+
+# IDs - Separating Hardware from Software Workloads
+HARDWARE_ID  := simd$(SIMD)_pe$(PE)_maxchannels$(MAX_CHANNELS)_tgtclkfreq$(FCLK_HZ)
+SIM_ID       := $(HARDWARE_ID)_cin$(CIN)_peqnt$(PEQNT)_seed$(SEED)_nin$(NIN)_bw$(MEM_B_GBPS)_lat$(MEM_L_S)
+
+# Nested Directory Paths
+HW_DIR       := $(RESULTS_DIR)/$(HARDWARE_ID)
+DC_DIR       := $(HW_DIR)/dc
+PT_DIR       := $(HW_DIR)/pt
+SIM_OUT_DIR  := $(HW_DIR)/sim
+
+PT_LOG       := $(PT_DIR)/pt_$(HARDWARE_ID).log
+
+FMAX_FILE    := $(WORKDIR)/fmax_hz_$(HARDWARE_ID).txt
+
 WEIGHTS_FILE  := $(WORKDIR)/weights.txt
 INPUTS_FILE   := $(WORKDIR)/inputs.txt
-EXPECTED_FILE := $(WORKDIR)/expected.txt
+EXPECTED_FILE := $(WORKDIR)/expected.txt 
 
-# Descriptive name saved ONLY for the final log result
-RUN_ID := cin$(CIN)_kx$(KX)_ky$(KY)_peq$(PEQNT)_simd$(SIMD)_pe$(PE)_mc$(MAX_CHANNELS)_seed$(SEED)_nin$(NIN)_clk$(FCLK_HZ)_bw$(MEM_B_GBPS)_lat$(MEM_L_S)
-RESULTS_DIR := results
+# -------------------------------
+# Parameter/signature stamps (drive rebuilds only when inputs change)
+# -------------------------------
+CFG_STAMP   := $(WORKDIR)/.cfg_params.stamp
+VEC_STAMP   := $(WORKDIR)/.vec_params.stamp
+SIM_STAMP   := $(WORKDIR)/.sim_params.stamp
+SYN_STAMP   := $(WORKDIR)/.syn_params.stamp
+STA_STAMP   := $(WORKDIR)/.sta_params.stamp
+POWER_STAMP := $(WORKDIR)/.power_params.stamp
 
-.PHONY: all vectors build run clean printcfg FORCE
+# Synthesis/STA outputs
+NETLIST_V := $(WORKDIR)/netlist/pe_mapped.v
+NETLIST_SDC := $(WORKDIR)/netlist/pe_mapped.sdc
 
-all: run
+# PrimePower input activity
+SAIF_FILE := $(WORKDIR)/dut.saif
 
-printcfg:
-	@echo "--- Configuration ---"
-	@echo "MAX_DOT_LANES=$(MAX_DOT_LANES) | MAX_FOLDS=$(MAX_FOLDS) | PAD_LANES=$(PAD_LANES)"
-	@echo "MAX_INPUT_DIM=$(MAX_INPUT_DIM) | MAX_OUTPUT_DIM=$(MAX_OUTPUT_DIM)"
-	@echo "RUN_ID=$(RUN_ID)"
+.PHONY: all cfg vectors build sim synth sta power clean FORCE
+all: sim
 
-vectors: $(WEIGHTS_FILE)
+# -------------------------------
+# Stamps (cmp trick)
+# -------------------------------
 
-# FORCE ensures Golden_Model.py runs even if weights.txt already exists
-$(WEIGHTS_FILE): Golden_Model.py FORCE
+$(CFG_STAMP): FORCE
+	@mkdir -p $(WORKDIR)
+	@printf "%s\n" \
+		"SIMD=$(SIMD)" \
+		"PE=$(PE)" \
+		"MAX_CHANNELS=$(MAX_CHANNELS)" \
+		"KERNEL_X=$(KERNEL_X)" \
+		"KERNEL_Y=$(KERNEL_Y)" \
+		"DATA_WIDTH=$(DATA_WIDTH)" \
+		> $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
+
+$(VEC_STAMP): FORCE
+	@mkdir -p $(WORKDIR)
+	@printf "%s\n" \
+		"CIN=$(CIN)" \
+		"KX=$(KX)" \
+		"KY=$(KY)" \
+		"PEQNT=$(PEQNT)" \
+		"SIMD=$(SIMD)" \
+		"SEED=$(SEED)" \
+		"NIN=$(NIN)" \
+		> $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
+
+$(SIM_STAMP): FORCE
+	@mkdir -p $(WORKDIR)
+	@printf "%s\n" \
+		"SIMD=$(SIMD)" \
+		"PE=$(PE)" \
+		"MAX_CHANNELS=$(MAX_CHANNELS)" \
+		"KERNEL_X=$(KERNEL_X)" \
+		"KERNEL_Y=$(KERNEL_Y)" \
+		"DATA_WIDTH=$(DATA_WIDTH)" \
+		> $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
+
+$(SYN_STAMP): FORCE
+	@mkdir -p $(WORKDIR)
+	@printf "%s\n" \
+		"SIMD=$(SIMD)" \
+		"PE=$(PE)" \
+		"MAX_CHANNELS=$(MAX_CHANNELS)" \
+		"KERNEL_X=$(KERNEL_X)" \
+		"KERNEL_Y=$(KERNEL_Y)" \
+		"DATA_WIDTH=$(DATA_WIDTH)" \
+		"SAED14_LIB_DB=$(SAED14_LIB_DB)" \
+		"CLK_PERIOD_NS=$(CLK_PERIOD_NS)" \
+		> $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
+
+$(STA_STAMP): FORCE
+	@mkdir -p $(WORKDIR)
+	@printf "%s\n" \
+		"SAED14_LIB_DB=$(SAED14_LIB_DB)" \
+		> $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
+
+$(POWER_STAMP): FORCE
+	@mkdir -p $(WORKDIR)
+	@printf "%s\n" \
+		"SAED14_LIB_DB=$(SAED14_LIB_DB)" \
+		> $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
+
+# -------------------------------
+# Generate unified RTL config header (single source of truth)
+# Both RTL + TB should: `include "rtl_cfg.svh"
+# -------------------------------
+cfg: $(CFG_SVH)
+
+$(CFG_SVH): $(CFG_STAMP)
+	@mkdir -p $(WORKDIR)
+	@echo "// Auto-generated. Do not edit." > $(CFG_SVH)
+	@echo "\`define SIMD $(SIMD)" >> $(CFG_SVH)
+	@echo "\`define PE $(PE)" >> $(CFG_SVH)
+	@echo "\`define MAX_CHANNELS $(MAX_CHANNELS)" >> $(CFG_SVH)
+	@echo "\`define KERNEL_X $(KERNEL_X)" >> $(CFG_SVH)
+	@echo "\`define KERNEL_Y $(KERNEL_Y)" >> $(CFG_SVH)
+	@echo "\`define DATA_WIDTH $(DATA_WIDTH)" >> $(CFG_SVH)
+
+# -------------------------------
+# Vectors
+# FIX: depend on $(VEC_STAMP)
+# -------------------------------
+vectors: $(WEIGHTS_FILE) $(INPUTS_FILE) $(EXPECTED_FILE)
+
+$(WEIGHTS_FILE) $(INPUTS_FILE) $(EXPECTED_FILE): Golden_Model.py $(VEC_STAMP)
 	@mkdir -p $(WORKDIR)
 	python3 Golden_Model.py \
 		--cin $(CIN) --kx $(KX) --ky $(KY) \
 		--pe_qnt $(PEQNT) --simd $(SIMD) \
 		--seed $(SEED) --n_inputs $(NIN) --out_dir $(WORKDIR)
 
-build: $(SIMV_BIN)
+# -------------------------------
+# Build RTL simulation
+# -------------------------------
+build: cfg $(SIMV_BIN)
 
-# FORCE ensures VCS recompiles the hardware with the latest parameters
-$(SIMV_BIN): $(PE_SV) $(TB_SV) FORCE
+$(SIMV_BIN): $(PE_SV) $(TB_SV) $(CFG_SVH) $(SIM_STAMP)
 	@mkdir -p $(WORKDIR)
-	$(VCS) $(VCS_FLAGS) $(PE_SV) $(TB_SV) -o $(SIMV_BIN) \
-		-pvalue+tb_pe.SIMD=$(SIMD) \
-		-pvalue+tb_pe.PE=$(PE) \
-		-pvalue+tb_pe.DATA_WIDTH=$(DATA_WIDTH) \
-		-pvalue+tb_pe.MAX_CHANNELS=$(MAX_CHANNELS) \
-		-pvalue+tb_pe.KERNEL_X=$(KERNEL_X) \
-		-pvalue+tb_pe.KERNEL_Y=$(KERNEL_Y) \
-		-pvalue+tb_pe.dut.SIMD=$(SIMD) \
-		-pvalue+tb_pe.dut.PE=$(PE) \
-		-pvalue+tb_pe.dut.DATA_WIDTH=$(DATA_WIDTH) \
-		-pvalue+tb_pe.dut.MAX_CHANNELS=$(MAX_CHANNELS) \
-		-pvalue+tb_pe.dut.KERNEL_X=$(KERNEL_X) \
-		-pvalue+tb_pe.dut.KERNEL_Y=$(KERNEL_Y)
+	$(VCS) $(VCS_FLAGS) +incdir+$(WORKDIR) $(PE_SV) $(TB_SV) -o $(SIMV_BIN)
 
-# Run the simulation and save the log to a permanent results folder
-run: vectors build
-	@mkdir -p $(RESULTS_DIR)
+# -------------------------------
+# Single sim target
+# -------------------------------
+sim: vectors build
+	@mkdir -p $(SIM_OUT_DIR)
+	@set -e; \
+	FCLK_USED="$(FCLK_HZ)"; \
+	if [ "$(USE_FCLK_SYNTH)" = "True" ] || [ "$(USE_FCLK_SYNTH)" = "true" ] || [ "$(USE_FCLK_SYNTH)" = "1" ]; then \
+		if [ ! -f "$(PT_LOG)" ] || [ "$(PE_SV)" -nt "$(PT_LOG)" ]; then \
+			echo "Notice: STA log missing or RTL ($(PE_SV)) was modified. Running Synthesis & STA..."; \
+			$(MAKE) sta; \
+		else \
+			echo "Notice: RTL is unchanged. Reusing existing PrimeTime results!"; \
+		fi; \
+		FCLK_USED=$$(grep "PT_FMAX_HZ=" $(PT_LOG) | tail -1 | sed 's/.*PT_FMAX_HZ=//'); \
+		if [ -z "$$FCLK_USED" ]; then \
+			echo "ERROR: Could not extract PT_FMAX_HZ from $(PT_LOG)."; \
+			exit 1; \
+		fi; \
+		echo "Extracted Fmax from results: $$FCLK_USED Hz"; \
+	fi; \
+	RUN_ID="$(SIM_ID)_fclkused$${FCLK_USED}"; \
 	./$(SIMV_BIN) \
 		+VEC_DIR=$(WORKDIR) \
 		+CIN=$(CIN) +KX=$(KX) +KY=$(KY) \
 		+PEQNT=$(PEQNT) +NIN=$(NIN) \
-		+FCLK_HZ=$(FCLK_HZ) +MEM_L_S=$(MEM_L_S) +MEM_B_GBPS=$(MEM_B_GBPS) \
-		| tee $(RESULTS_DIR)/sim_$(RUN_ID).log
-	@echo "Log saved to: $(RESULTS_DIR)/sim_$(RUN_ID).log"
+		+FCLK_HZ=$${FCLK_USED} +MEM_L_S=$(MEM_L_S) +MEM_B_GBPS=$(MEM_B_GBPS) \
+		| tee $(SIM_OUT_DIR)/sim_$${RUN_ID}.log; \
+	echo "Log saved to: $(SIM_OUT_DIR)/sim_$${RUN_ID}.log"
+
+# -------------------------------
+# Synthesis (Design Compiler)
+# -------------------------------
+synth: $(NETLIST_V) $(NETLIST_SDC)
+
+$(NETLIST_V) $(NETLIST_SDC): $(PE_SV) $(CFG_SVH) $(SYN_DIR)/dc/run_dc.tcl $(SYN_STAMP)
+	@mkdir -p $(DC_DIR) $(WORKDIR)/netlist
+	BASE_ID="$(HARDWARE_ID)" SAED14_LIB_DB="$(SAED14_LIB_DB)" CLK_PERIOD_NS="$(CLK_PERIOD_NS)" OUT_DIR="$(DC_DIR)" \
+	$(DC_SHELL) -f $(SYN_DIR)/dc/run_dc.tcl | tee $(DC_DIR)/dc_$(HARDWARE_ID).log
+
+# -------------------------------
+# STA (PrimeTime)
+# -------------------------------
+sta: $(FMAX_FILE)
+
+$(FMAX_FILE): $(NETLIST_V) $(NETLIST_SDC) $(SYN_DIR)/pt/run_pt.tcl $(STA_STAMP)
+	@mkdir -p $(PT_DIR)
+	BASE_ID="$(HARDWARE_ID)" SAED14_LIB_DB="$(SAED14_LIB_DB)" OUT_DIR="$(PT_DIR)" \
+	$(PT_SHELL) -f $(SYN_DIR)/pt/run_pt.tcl | tee $(PT_DIR)/pt_$(HARDWARE_ID).log
+	@grep "PT_FMAX_HZ=" $(PT_DIR)/pt_$(HARDWARE_ID).log | tail -1 | sed 's/.*PT_FMAX_HZ=//' > $(FMAX_FILE)
+	@echo "Fmax written to $(FMAX_FILE): $$(cat $(FMAX_FILE))"
+
+# -------------------------------
+# Power (PrimeTime PX)
+# -------------------------------
+power: $(PT_DIR)/power_$(SIM_ID).log
+
+$(SAIF_FILE): sim
+	@true
+
+$(PT_DIR)/power_$(SIM_ID).log: $(SAIF_FILE) $(NETLIST_V) $(NETLIST_SDC) $(SYN_DIR)/pt/run_power.tcl $(POWER_STAMP)
+	@mkdir -p $(PT_DIR)
+	BASE_ID="$(SIM_ID)" SAED14_LIB_DB="$(SAED14_LIB_DB)" OUT_DIR="$(PT_DIR)" \
+	$(PT_SHELL) -f $(SYN_DIR)/pt/run_power.tcl | tee $(PT_DIR)/power_$(SIM_ID).log
 
 clean:
-	rm -rf $(WORKDIR) $(RESULTS_DIR) csrc *.daidir ucli.key *.vpd *.log vcs.log
+	rm -rf $(WORKDIR) csrc *.daidir ucli.key *.vpd *.log vcs.log \
+	.rce/ alib-52/ cksum_dir/ *.svf \
+	crte_*.txt Synopsys_stack_trace_*.txt \
+	pwr_shell_command.log filenames.log default.svf
+
+FORCE:

@@ -1,13 +1,20 @@
 `timescale 1ns/1ps
+`include "rtl_cfg.svh"
 
 module tb_pe;
+  // -------------------------------
+  // SAIF Timescale Definition
+  // MUST MATCH `timescale unit above!
+  // 1ns = 1.0e-9 | 1ps = 1.0e-12
+  // -------------------------------
+  localparam real SAIF_TIMESCALE = 1.0e-9;
 
   // -------------------------------
   // Compile-time parameters (match DUT build)
   // -------------------------------
-  parameter shortint unsigned  SIMD            = 64;
-  parameter shortint unsigned  PE              = 16;
-  parameter byte unsigned      DATA_WIDTH      = 8;
+  parameter shortint unsigned  SIMD            = `SIMD;
+  parameter shortint unsigned  PE              = `PE;
+  parameter byte unsigned      DATA_WIDTH      = `DATA_WIDTH;
 
   parameter byte unsigned      ACC_BIT_WIDTH   = 32;
   parameter byte unsigned      M_INT_PRECISION = 32;
@@ -22,9 +29,9 @@ module tb_pe;
   parameter shortint           MAX_VAL = (1 <<< (DATA_WIDTH-1)) - 1;
   parameter shortint           MIN_VAL = -(1 <<< (DATA_WIDTH-1));
 
-  parameter shortint unsigned  MAX_CHANNELS = 16;
-  parameter shortint unsigned  KERNEL_X = 3;
-  parameter shortint unsigned  KERNEL_Y = 3;
+  parameter shortint unsigned  MAX_CHANNELS = `MAX_CHANNELS;
+  parameter shortint unsigned  KERNEL_X = `KERNEL_X;
+  parameter shortint unsigned  KERNEL_Y = `KERNEL_Y;
   parameter int unsigned       MAX_DOT_LANES = MAX_CHANNELS*KERNEL_X*KERNEL_Y;
   parameter int unsigned       MAX_FOLDS = (MAX_DOT_LANES + SIMD - 1) / SIMD;
 
@@ -255,6 +262,11 @@ module tb_pe;
     int Tcomp_c;
     int Tcomp_prev_c;
 
+    real ops_per_input;
+    real macs_per_input;
+    real gops_t;
+    real gmacs_t;
+
   begin
     Tcomp_prev_c = 0;
 
@@ -283,7 +295,7 @@ module tb_pe;
     join_none
 
     $display("[TB] Running %0d inputs from %s, checking vs %s", nin, in_path, exp_path);
-    $display("[TB][MEM] FCLK_HZ=%0.3e MEM_L_S=%0.3e MEM_B_GBPS=%0.3f", FCLK_HZ, MEM_L_S, MEM_B_GBPS);
+    $display("[TB][MEM] FCLK_HZ=%g MEM_L_S=%g MEM_B_GBPS=%g", FCLK_HZ, MEM_L_S, MEM_B_GBPS);
 
     // bytes transferred per input (includes padding)
     s_in_bytes = FOLD_QNT_INT * SIMD * (DATA_WIDTH/8);
@@ -331,8 +343,17 @@ module tb_pe;
       Tcomp_c = int'(done_cycle - start_cycle);
       Tcomp_prev_c = Tcomp_c;
 
-      $display("[TB][t=%0d] Tmem_c=%0d Tidle_c=%0d Tcomp_c=%0d s_in_bytes=%0d",
-               t, Tmem_c, Tidle_c, Tcomp_c, s_in_bytes);
+      // Calculate instantaneous performance for this specific input
+      // Ops = PEs * (2 * SIMD * fold_qnt) | MACs = PEs * SIMD * fold_qnt
+      ops_per_input  = real'(pe_qnt) * ((2.0 * real'(SIMD) * real'(fold_qnt)) + 3.0); // +3 for scaling
+      macs_per_input = real'(pe_qnt) * real'(SIMD) * real'(fold_qnt);
+      
+      // GOPS = (Ops / 1e9) / (Cycles_this_input / FCLK_HZ)
+      gops_t  = (ops_per_input / 1.0e9) / (real'(Tidle_c + Tcomp_c) / FCLK_HZ);
+      gmacs_t = (macs_per_input / 1.0e9) / (real'(Tidle_c + Tcomp_c) / FCLK_HZ);
+
+      $display("[TB][t=%0d] Tmem=%0d Tidle=%0d Tcomp=%0d | %.2f GOPS | %.2f GMACs",
+               t, Tmem_c, Tidle_c, Tcomp_c, gops_t, gmacs_t);
 
       // ---- Correctness check (unchanged) ----
       for (int p = 0; p < pe_qnt; p++) begin
@@ -431,8 +452,23 @@ module tb_pe;
     @(posedge clk);
 
     run_and_check(inputs_path, expected_path, NIN);
+    
+    $display("[TB] Writing SAIF power activity to work/dut.saif...");
+    $toggle_stop();
+    @(posedge clk);
+    $toggle_report("work/dut.saif", SAIF_TIMESCALE, dut);
+    $finish;
 
     $finish;
+  end
+
+  // --------------------------------------------------------
+  // SAIF Power Activity Collection
+  // --------------------------------------------------------
+  initial begin
+    $display("[TB] Starting SAIF activity collection...");
+    $set_toggle_region(dut);
+    $toggle_start();
   end
 
 endmodule

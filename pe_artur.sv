@@ -1,8 +1,9 @@
 `timescale 1ns/1ps
+`include "rtl_cfg.svh"
 
 module pe #
 (
-        parameter byte unsigned      DATA_WIDTH=8,
+        parameter byte unsigned      DATA_WIDTH = `DATA_WIDTH,                          //data width of the inputs and outputs
         parameter shortint           MAX_VAL = (1 <<< (DATA_WIDTH-1)) - 1,              //maximum output value based on data width. Used to clip the accumulator output when scaling values
         parameter shortint           MIN_VAL = -(1 <<< (DATA_WIDTH-1)),                 //minimum output value based on data width. Used to clip the accumulator output when scaling values
         parameter byte unsigned      ACC_BIT_WIDTH=32,                                  //accumulator data width, set as 32 by default
@@ -10,11 +11,11 @@ module pe #
         parameter longint signed     PRECISION_CORRECTION=1 << (M_INT_PRECISION-1),     //precision correction, due to imprecision nature, this is added so rounding values wont do too much damage. It is added to rounded value beforehand to avoid always rounding down with bit-shift. 
         parameter byte unsigned      TEMP_DATA_WIDTH=ACC_BIT_WIDTH+M_INT_PRECISION+1,   //out_temp data width, out_temp=scale*acc_out+correction
         parameter byte unsigned      NUM_ACTS_FUN=2,                                    //Number of implemented activation functions: Identity, ReLU, ReLU6 , LeakyReLU
-        parameter shortint unsigned  SIMD=64,                                           //Number of SIMDs
-        parameter shortint unsigned  PE=16,                                             //Number of PEs, i.e, outputs
-        parameter shortint unsigned  MAX_CHANNELS = 16,                                  //Maximum number of input channels
-        parameter shortint unsigned  KERNEL_X = 3,                                       
-        parameter shortint unsigned  KERNEL_Y = 3,
+        parameter shortint unsigned  SIMD = `SIMD,                                      //Number of SIMDs
+        parameter shortint unsigned  PE = `PE,                                          //Number of PEs, i.e, outputs
+        parameter shortint unsigned  MAX_CHANNELS = `MAX_CHANNELS,                      //Maximum number of input channels
+        parameter shortint unsigned  KERNEL_X = `KERNEL_X,                                       
+        parameter shortint unsigned  KERNEL_Y = `KERNEL_Y,
         parameter int unsigned       MAX_DOT_LANES = MAX_CHANNELS*KERNEL_X*KERNEL_Y,    // maximum ammount of folds, control how many times the computation/weight reading will be done with for the same PE_out, each computation will do SIMDs multiplications and sums and will acumulate till the number specief is given. Basically, this is the maximum number of folds
         parameter int unsigned       MAX_FOLDS = (MAX_DOT_LANES + SIMD - 1) / SIMD,     // Fold-aligned padded lanes so part-selects are always in range
         parameter int unsigned       PAD_LANES = MAX_FOLDS * SIMD,                      // Fold-aligned MAX_INPUT_DIM in BITS (this is what all your buses/memories use)
@@ -57,8 +58,8 @@ module pe #
         output  logic                                                          output_ready,
         output  logic                                                          ready_to_receive
     );
-
-    enum byte unsigned { empty=0, writing=1, ready=2, computing=3} state, next_state;
+    
+    enum logic [1:0] { empty=0, writing=1, ready=2, computing=3 } state, next_state;
 
     logic [PE*DATA_WIDTH-1:0]                                                  out_PE;
     `ifndef SYNTHESIS
@@ -112,7 +113,6 @@ module pe #
                 end
             end
 
-            default: next_state = empty;
         endcase
     end
 
@@ -124,22 +124,20 @@ module pe #
     end
 
     always_ff @(posedge clk) begin : main_logic
-        if (!rst_n) begin // reset buffers, counters and memory
+        if (!rst_n) begin 
+            // Resetting flags used by the control unit
             computing_complete <= '0;  
-            write_complete <= '0;
-            output_ready <= '0;
-            ready_to_receive <= '0;
-            out <= '0;
-            out_PE <= '0;
-            out_acc <= '0;
-            weights_ind <= '0;
-            PE_ind <= '0;
-            read_posx <= '0;
-            read_posy <= '0;
-            scales <= '0;
-            for (int unsigned PE_indx = 0; PE_indx < PE; PE_indx++) begin
-                weights[PE_indx] <= '0;  
-            end;
+            write_complete     <= '0;
+            output_ready       <= '0;
+            ready_to_receive   <= '0;
+            
+            // Resetting small index counters to be safe
+            weights_ind        <= '0;
+            PE_ind             <= '0;
+            read_posx          <= '0;
+            read_posy          <= '0;
+
+            // DELETED the assignments for out, out_PE, out_acc, scales, and the weights loop! This avoids extra area and power from unnecessary reset units for these huge registers. Im already resetting the control unit flags, so this already avoids any problems. 
         end
         else if (!set_cfg_n) begin // set input values into register
             fold_qnt_reg <= fold_qnt + 1;
@@ -180,8 +178,8 @@ module pe #
                                 end
                             end
                             else begin
-                                // scale phase: single beat after all PEs
-                                scales <= inp_data[M_INT_PRECISION-1:0];
+                                // scale phase: single beat after all PEs, using signed so compiler doesnt complain about signed/unsigned assignments
+                                scales <= signed'(inp_data[M_INT_PRECISION-1:0]);
                                 write_complete <= '1;
                                 read_posx_next = '0;
                                 read_posy_next = '0;
@@ -208,7 +206,8 @@ module pe #
                 computing: begin
                     //==============ACCUMULATOR==============
                     logic signed [ACC_BIT_WIDTH-1:0] acc_next;
-                    acc_next = (weights_ind == 0) ? '0 : out_acc;
+                    //Uses signed to avoid warnings of signed/unsigned attribution
+                    acc_next = (weights_ind == 0) ? signed'(0) : out_acc;
 
                     for (shortint unsigned simd_ind = 0; simd_ind < SIMD; simd_ind++) begin
                         acc_next +=
