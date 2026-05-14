@@ -258,7 +258,7 @@ synth: $(NETLIST_V) $(NETLIST_SDC)
 $(NETLIST_V) $(NETLIST_SDC): $(PE_SV) $(CFG_SVH) $(SYN_DIR)/dc/run_dc.tcl $(SYN_STAMP)
 	@mkdir -p $(DC_DIR) $(WORKDIR)/netlist
 	BASE_ID="$(HARDWARE_ID)" SAED14_LIB_DB="$(SAED14_LIB_DB)" CLK_PERIOD_NS="$(CLK_PERIOD_NS)" OUT_DIR="$(DC_DIR)" \
-	dc_shell -f syn/dc/run_dc.tcl > $(OUT_DIR)/dc_$(BASE_ID).log 2>&1
+	dc_shell -f $(SYN_DIR)/dc/run_dc.tcl > $(SIM_OUT_DIR)/dc_$(BASE_ID).log 2>&1
 
 # -------------------------------
 # STA (PrimeTime)
