@@ -117,3 +117,4 @@ alib-52/
 cksum_dir/
 .rce/
 run_sweep.sh
+sweep.pid

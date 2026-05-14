@@ -54,19 +54,18 @@ module pe #
         input logic [$clog2(MAX_FOLDS+1)-1:0]                                  fold_qnt,
         input logic [$clog2(PE+1)-1:0]                                         pe_qnt,
         //===========================OUTPUTS===========================
-        output  logic   [MAX_OUTPUT_DIM-1:0]                                   out,
+        output logic [MAX_OUTPUT_DIM-1:0]                                      out,
         output  logic                                                          output_ready,
         output  logic                                                          ready_to_receive
     );
     
     enum logic [1:0] { empty=0, writing=1, ready=2, computing=3 } state, next_state;
 
-    logic [PE*DATA_WIDTH-1:0]                                                  out_PE;
+    logic signed [DATA_WIDTH-1:0]                                              out_PE [PE-1:0];
     `ifndef SYNTHESIS
     logic signed [TEMP_DATA_WIDTH-1:0]                                         out_temp;
     `endif
     logic [MAX_INPUT_DIM-1:0]                                                  weights  [PE-1:0];
-    //logic signed [M_INT_PRECISION-1:0]                                       scales   [PE-1:0];
     logic signed [M_INT_PRECISION-1:0]                                         scales;
     logic [MAX_INPUT_DIM-1:0]                                                  inp_data_reg;
     logic signed [ACC_BIT_WIDTH-1:0]                                           out_acc;
@@ -137,16 +136,27 @@ module pe #
             read_posx          <= '0;
             read_posy          <= '0;
 
-            // DELETED the assignments for out, out_PE, out_acc, scales, and the weights loop! This avoids extra area and power from unnecessary reset units for these huge registers. Im already resetting the control unit flags, so this already avoids any problems. 
+            // Initialize critical tiny registers to prevent X propagation
+            scales             <= '0;
+            inp_data_reg       <= '0;
         end
-        else if (!set_cfg_n) begin // set input values into register
-            fold_qnt_reg <= fold_qnt + 1;
+        else if (!set_cfg_n) begin 
+            fold_qnt_reg <= fold_qnt;
             pe_qnt_reg <= pe_qnt;
             act_fun_reg <= act_fun;
         end
         // Latch new input data only when it is accepted
         else if (((state == ready) && inp_rd) || ((state == computing) && computing_complete && inp_rd)) begin
             inp_data_reg <= inp_data;
+            //clear per-inference state here so out_PE never carries old/X lanes across PEs or inputs
+            out_PE <= '{default: '0};
+            out <= '0;
+            out_acc <= '0;
+            weights_ind <= '0;
+            PE_ind <= '0;
+            computing_complete <= 1'b0;
+            output_ready <= 1'b0;
+            ready_to_receive <= 1'b0;
         end
         else begin
             case(state)
@@ -154,8 +164,6 @@ module pe #
                 writing: begin
                     logic [$bits(read_posx)-1:0] read_posx_next;
                     logic [$bits(read_posy)-1:0] read_posy_next;
-                    out <= '0;
-                    out_PE <= '0;
                     output_ready <= '0;
                     ready_to_receive <= '0;
                     read_posx_next = read_posx;
@@ -168,13 +176,14 @@ module pe #
                                 // write fold
                                 weights[read_posy][read_posx * SIMD * DATA_WIDTH +: SIMD * DATA_WIDTH] <= inp_data[SIMD*DATA_WIDTH-1:0];
 
-                                read_posx_next = read_posx + 1;
-                                read_posy_next = read_posy;
-
                                 // finished this PE's folds?
-                                if (read_posx_next == fold_qnt_reg - 1) begin
+                                if (read_posx == fold_qnt_reg - 1) begin
                                     read_posy_next = read_posy + 1;
                                     read_posx_next = '0;
+                                end
+                                else begin
+                                    read_posx_next = read_posx + 1;
+                                    read_posy_next = read_posy;
                                 end
                             end
                             else begin
@@ -193,8 +202,6 @@ module pe #
                 //==============WRITING STATE==============
                 //==============READY STATE==============
                 ready: begin // just set to zero buffers, flags and counters
-                    out <= '0;
-                    out_PE <= '0;
                     output_ready <= '0;
                     ready_to_receive <= '1;
                     computing_complete <= '0;
@@ -219,42 +226,50 @@ module pe #
                     //==============ACCUMULATOR==============
 
                     //==============ACTIVATION FUNCTION==============
-                    if (weights_ind == fold_qnt - 1) begin
-                        logic [MAX_OUTPUT_DIM-1:0] out_PE_next;
-                        logic signed [TEMP_DATA_WIDTH-1:0] temp_next; // Option 2B: Local combinational temp
-
-                        out_PE_next = out_PE;
+                    if (weights_ind == fold_qnt_reg - 1) begin
+                        logic signed [TEMP_DATA_WIDTH-1:0] temp_next;
+                        logic signed [DATA_WIDTH-1:0] result_dw;
+                        logic signed [DATA_WIDTH-1:0] out_PE_next [PE-1:0];
 
                         // 1. Calculate math instantly
                         temp_next = ((scales * acc_next) + PRECISION_CORRECTION) >>> M_INT_PRECISION;
 
                     `ifndef SYNTHESIS
-                        // 2. Safely pass to debug variable ONLY in simulation
                         out_temp <= temp_next;
                     `endif
 
-                        // 3. Use the local variable for unambiguous comparisons
+                        // 3. Clip values
                         if (temp_next > MAX_VAL)
-                            out_PE_next[(PE_ind) * DATA_WIDTH +: DATA_WIDTH] = MAX_VAL;
+                            result_dw = signed'(MAX_VAL[DATA_WIDTH-1:0]);
                         else if (temp_next < 0 && act_fun_reg == 1)
-                            out_PE_next[(PE_ind) * DATA_WIDTH +: DATA_WIDTH] = 0;
+                            result_dw = '0;
                         else if (temp_next < MIN_VAL)
-                            out_PE_next[(PE_ind) * DATA_WIDTH +: DATA_WIDTH] = MIN_VAL;
+                            result_dw = signed'(MIN_VAL[DATA_WIDTH-1:0]);
                         else
-                            out_PE_next[(PE_ind) * DATA_WIDTH +: DATA_WIDTH] = temp_next[DATA_WIDTH-1:0];
+                            result_dw = signed'(temp_next[DATA_WIDTH-1:0]);
+                        
+                        // 4. Create the "next state" of the entire array instantly
+                        out_PE_next = out_PE;
+                        out_PE_next[PE_ind] = result_dw;
 
+                        // 5. Write back to our internal registers
                         out_PE <= out_PE_next;
 
+                        // 6. Publish to the 1D output bus cleanly!
                         if (PE_ind == pe_qnt_reg - 1) begin
-                            //if the number of outputs was computed and the number of weights fold was finished set computing_complete to 1
-                            // also set the counters index of weight and PE to zero
-                            out <= out_PE_next;
+                            // Unconditionally pack the 2D array into the 1D output bus.
+                            // Because there are no "if" statements checking variable indexes here,
+                            // this wires the flip-flops directly WITHOUT a massive MUX!
+                            for (int i = 0; i < PE; i++) begin
+                                // Cast the signed internal math back to raw unsigned bits for the output port
+                                out[i * DATA_WIDTH +: DATA_WIDTH] <= unsigned'(out_PE_next[i]);
+                            end
                             output_ready <= '1;
                             ready_to_receive <= '1;
                             computing_complete <= '1;
                         end
                         else begin
-                            out <= '0;
+                            out <= '0; 
                             output_ready <= '0;
                             ready_to_receive <= '0;
                             computing_complete <= '0;
@@ -263,11 +278,11 @@ module pe #
                     //==============ACTIVATION FUNCTION==============
 
                     //==============STATE PROGRESSION==============
-                    if (PE_ind == pe_qnt_reg - 1 && weights_ind == fold_qnt - 1) begin
+                    if (PE_ind == pe_qnt_reg - 1 && weights_ind == fold_qnt_reg - 1) begin
                         // Outputs handled in Activation block above. 
                     end
-                    else if (weights_ind == fold_qnt - 1) begin
-                        //when weight fold is completed meand that one output(filter or element) is finished
+                    else if (weights_ind == fold_qnt_reg - 1) begin
+                        //when weight fold is completed means that one output(filter or element) is finished
                         //set weight index to zero and increment PE index
                         weights_ind <= 0;
                         PE_ind <= PE_ind + 1;
@@ -280,8 +295,6 @@ module pe #
                 end
                 //==============COMPUTING STATE==============
                 default: begin
-                    out <= '0;
-                    out_PE <= '0;
                     output_ready <= '0;
                     ready_to_receive <= '0;
                 end
@@ -325,7 +338,10 @@ module pe #
                     check_current_weights[pe_indx * SIMD * DATA_WIDTH +: SIMD * DATA_WIDTH] <= '0;
                 end
             end
-            check_output_PE <= out_PE;
+            // Repack the 2D array back into a 1D vector for the testbench debug port
+            for (int i = 0; i < PE; i++) begin
+                check_output_PE[i * DATA_WIDTH +: DATA_WIDTH] <= out_PE[i];
+            end
             check_computing_complete <= computing_complete;
             check_write_complete <= write_complete;
             // check_out_add <= out_add;

@@ -2,12 +2,6 @@
 `include "rtl_cfg.svh"
 
 module tb_pe;
-  // -------------------------------
-  // SAIF Timescale Definition
-  // MUST MATCH `timescale unit above!
-  // 1ns = 1.0e-9 | 1ps = 1.0e-12
-  // -------------------------------
-  localparam real SAIF_TIMESCALE = 1.0e-9;
 
   // -------------------------------
   // Compile-time parameters (match DUT build)
@@ -106,11 +100,39 @@ module tb_pe;
   logic [ACC_BIT_WIDTH-1:0] check_out_acc;
   logic signed [TEMP_DATA_WIDTH-1:0] check_out_temp;
 
+  // --------------------------------------------------------
+  // VCD dump for power (will be converted to SAIF via vcd2saif)
+  // --------------------------------------------------------
+  initial begin
+    $display("[TB] Dumping VCD activity to work/dut.vcd ...");
+    $dumpfile("work/dut.vcd");
+    $dumpvars(0, tb_pe);
+  end
+
   // -------------------------------
   // Clock generation
   // -------------------------------
-  initial clk = 0;
-  always #1 clk = ~clk;
+  // IMPORTANT: In the original TB you had a fixed #1 clock. That makes the DUT
+  // run at 500MHz in simulation regardless of FCLK_HZ. This TB now generates
+  // a clock derived from FCLK_HZ so the cycle counts and the memory-model math
+  // match the simulated clock.
+  //
+  // timescale is 1ns/1ps, so:
+  //   period_ns = 1e9 / FCLK_HZ
+  //   half_period_ns = period_ns / 2
+  // -------------------------------
+  real CLK_PERIOD_NS;
+  real CLK_HALF_NS;
+
+  initial begin
+    clk = 0;
+    // default before plusargs are parsed; will be recomputed later too
+    CLK_PERIOD_NS = 1.0e9 / FCLK_HZ;
+    CLK_HALF_NS   = CLK_PERIOD_NS / 2.0;
+    forever begin
+      #(CLK_HALF_NS) clk = ~clk;
+    end
+  end
 
   // -------------------------------
   // Helpers
@@ -231,11 +253,18 @@ module tb_pe;
 
     $display("[TB] Loaded layer scale(Mint) = %0d (0x%0h)", scale_val, scale_val);
 
+    // Make the scale beat explicit and synchronous
     inp_data = '0;
     inp_data[M_INT_PRECISION-1:0] = scale_val[M_INT_PRECISION-1:0];
-    @(posedge clk);
+    
+    // Keep wr_en high through the sampling edge
+    wr_en = 1; 
+    @(posedge clk);  // DUT samples scale here
 
-    wr_en = 0; // Deassert when done
+    // Now drop wr_en and clear inp_data
+    wr_en = 0;
+    inp_data = '0;
+
     $fclose(weight_file);
     $display("[TB] Weights loaded.\n");
   end
@@ -248,6 +277,7 @@ module tb_pe;
     int simd_vals [SIMD];
     int exp_vals  [PE];
     logic signed [DATA_WIDTH-1:0] dut_val;
+    logic [MAX_OUTPUT_DIM-1:0] out_sample;
 
     // Timing counters
     longint unsigned cycle_ctr;
@@ -266,6 +296,8 @@ module tb_pe;
     real macs_per_input;
     real gops_t;
     real gmacs_t;
+    real oi_gop;
+    real oi_gmac;
 
   begin
     Tcomp_prev_c = 0;
@@ -330,14 +362,15 @@ module tb_pe;
       Tidle_c = (Tmem_c > Tcomp_prev_c) ? (Tmem_c - Tcomp_prev_c) : 0;
       repeat (Tidle_c) @(posedge clk);
 
-      // Issue input
-      inp_rd <= 1;
+      // Issue input: make it a clean 1-cycle pulse aligned to posedge
+      inp_rd <= 1'b1;
       start_cycle = cycle_ctr;
       @(posedge clk);
-      inp_rd <= 0;
+      inp_rd <= 1'b0;
 
       // Wait for a clock edge where output_ready is high
       do @(posedge clk); while (output_ready !== 1);
+      out_sample = out;
       done_cycle = cycle_ctr;
 
       Tcomp_c = int'(done_cycle - start_cycle);
@@ -347,15 +380,18 @@ module tb_pe;
       // Ops = PEs * (2 * SIMD * fold_qnt) | MACs = PEs * SIMD * fold_qnt
       ops_per_input  = real'(pe_qnt) * ((2.0 * real'(SIMD) * real'(fold_qnt)) + 3.0); // +3 for scaling
       macs_per_input = real'(pe_qnt) * real'(SIMD) * real'(fold_qnt);
-      
+
       // GOPS = (Ops / 1e9) / (Cycles_this_input / FCLK_HZ)
       gops_t  = (ops_per_input / 1.0e9) / (real'(Tidle_c + Tcomp_c) / FCLK_HZ);
       gmacs_t = (macs_per_input / 1.0e9) / (real'(Tidle_c + Tcomp_c) / FCLK_HZ);
 
-      $display("[TB][t=%0d] Tmem=%0d Tidle=%0d Tcomp=%0d | %.2f GOPS | %.2f GMACs",
-               t, Tmem_c, Tidle_c, Tcomp_c, gops_t, gmacs_t);
+      // Calculates Operational Intensity
+      oi_gop  = ops_per_input / real'(s_in_bytes);
+      oi_gmac = macs_per_input / real'(s_in_bytes);
 
-      // ---- Correctness check (unchanged) ----
+      $display("[TB][t=%0d] Tmem=%0d Tidle=%0d Tcomp=%0d | %g GOP/s | %g GMAC/s | %g OP/Byte | %g MAC/Byte",
+               t, Tmem_c, Tidle_c, Tcomp_c, gops_t, gmacs_t, oi_gop, oi_gmac);
+
       for (int p = 0; p < pe_qnt; p++) begin
         r = $fscanf(exp_file, "%d", exp_vals[p]);
         if (r != 1) begin
@@ -365,13 +401,15 @@ module tb_pe;
       end
 
       for (int p = 0; p < pe_qnt; p++) begin
-        dut_val = out[p*DATA_WIDTH +: DATA_WIDTH];
+        // Slice the specific PE's result out of the 1D bus
+        dut_val = out_sample[p*DATA_WIDTH +: DATA_WIDTH]; 
+        
         if ($signed(dut_val) !== exp_vals[p]) begin
           $display("\n==== MISMATCH ====");
           $display("t=%0d p=%0d", t, p);
           $display("DUT out = %0d (0x%0h)", $signed(dut_val), dut_val);
           $display("EXP out = %0d", exp_vals[p]);
-          $display("Raw out bus = 0x%0h", out);
+          $display("Raw out bus = 0x%0h", out); // We can print the raw bus again!
           $display("cfg: CIN=%0d KX=%0d KY=%0d DOT_LEN=%0d SIMD=%0d fold_qnt=%0d pe_qnt=%0d act_fun=%0d",
                    CIN, KX, KY, DOT_LEN, SIMD, fold_qnt, pe_qnt, act_fun);
           $display("state=%0d weight_ind=%0d PE_ind=%0d out_acc=%0d out_temp=%0d",
@@ -405,31 +443,41 @@ module tb_pe;
     void'($value$plusargs("MEM_B_GBPS=%f", MEM_B_GBPS));
     void'($value$plusargs("MEM_L_S=%f", MEM_L_S));
 
+    // Recompute sim clock after FCLK plusarg is known
+    CLK_PERIOD_NS = 1.0e9 / FCLK_HZ;
+    CLK_HALF_NS   = CLK_PERIOD_NS / 2.0;
+
     DOT_LEN = CIN * KX * KY;
     FOLD_QNT_INT = ceil_div_int(DOT_LEN, SIMD);
 
-    fold_qnt <= FOLD_QNT_INT[$bits(fold_qnt)-1:0];
-    pe_qnt   <= PEQNT[$bits(pe_qnt)-1:0];
-    act_fun  <= ACT_FUN_SEL[W_ACT-1:0];
+    // 1. Initial stable state (Time 0)
+    fold_qnt = FOLD_QNT_INT[$bits(fold_qnt)-1:0];
+    pe_qnt   = PEQNT[$bits(pe_qnt)-1:0];
+    act_fun  = ACT_FUN_SEL[W_ACT-1:0];
 
-    // Init signals
-    wr_en     <= 0;
-    str_wr    <= 0;
-    inp_rd    <= 0;
-    rst_n     <= 0;
-    set_cfg_n <= 1;
+    wr_en     = 0;
+    str_wr    = 0;
+    inp_rd    = 0;
+    set_cfg_n = 1; // Keep config disabled initially
+    rst_n     = 0; // Assert reset initially
     clear_inp_data();
 
     $display("[TB] CIN=%0d KX=%0d KY=%0d DOT_LEN=%0d SIMD=%0d => fold_qnt=%0d; pe_qnt=%0d; NIN=%0d; VEC_DIR=%s; ACT_FUN_SEL=%0d",
             CIN, KX, KY, DOT_LEN, SIMD, FOLD_QNT_INT, PEQNT, NIN, VEC_DIR, ACT_FUN_SEL);
 
-    // Apply config cleanly aligned to clocks
-    rst_n     <= 0;
-    set_cfg_n <= 0;
+    // 2. Hold reset for a few cycles to clear all DUT registers
     repeat (2) @(posedge clk);
-    rst_n     <= 1;
+    rst_n = 1; // Release reset
+    
+    // Give it one cycle of breathing room after reset
     @(posedge clk);
-    set_cfg_n <= 1;
+
+    // 3. Strobe the Config (Inputs have been stable for 3 cycles now)
+    set_cfg_n = 0; 
+    @(posedge clk); // DUT cleanly samples fold_qnt and pe_qnt right here
+    
+    set_cfg_n = 1;  // Lock it in
+    @(posedge clk);
 
     // Force DUT into writing state
     str_wr <= 1;
@@ -452,23 +500,8 @@ module tb_pe;
     @(posedge clk);
 
     run_and_check(inputs_path, expected_path, NIN);
-    
-    $display("[TB] Writing SAIF power activity to work/dut.saif...");
-    $toggle_stop();
-    @(posedge clk);
-    $toggle_report("work/dut.saif", SAIF_TIMESCALE, dut);
-    $finish;
 
     $finish;
-  end
-
-  // --------------------------------------------------------
-  // SAIF Power Activity Collection
-  // --------------------------------------------------------
-  initial begin
-    $display("[TB] Starting SAIF activity collection...");
-    $set_toggle_region(dut);
-    $toggle_start();
   end
 
 endmodule
