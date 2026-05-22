@@ -291,6 +291,8 @@ module tb_pe;
     int Tidle_c;
     int Tcomp_c;
     int Tcomp_prev_c;
+    int Tmem_BW_c;
+    int Tmem_L_c;
 
     real ops_per_input;
     real macs_per_input;
@@ -298,6 +300,8 @@ module tb_pe;
     real gmacs_t;
     real oi_gop;
     real oi_gmac;
+    real Tmem_BW_s;
+    real Tmem_L_s;
 
   begin
     Tcomp_prev_c = 0;
@@ -354,6 +358,10 @@ module tb_pe;
       // Tmem_s = L + s/B
       Tmem_s = MEM_L_S + (real'(s_in_bytes) / (MEM_B_GBPS * 1.0e9));
       Tmem_c = sec_to_cycles(Tmem_s, FCLK_HZ);
+      Tmem_L_s = MEM_L_S;
+      Tmem_L_c = sec_to_cycles(Tmem_L_s, FCLK_HZ);
+      Tmem_BW_s = real'(s_in_bytes) / (MEM_B_GBPS * 1.0e9);
+      Tmem_BW_c = sec_to_cycles(Tmem_BW_s, FCLK_HZ);
 
       // wait until DUT ready
       do @(posedge clk); while (ready_to_receive !== 1);
@@ -389,8 +397,8 @@ module tb_pe;
       oi_gop  = ops_per_input / real'(s_in_bytes);
       oi_gmac = macs_per_input / real'(s_in_bytes);
 
-      $display("[TB][t=%0d] Tmem=%0d Tidle=%0d Tcomp=%0d | %g GOP/s | %g GMAC/s | %g OP/Byte | %g MAC/Byte",
-               t, Tmem_c, Tidle_c, Tcomp_c, gops_t, gmacs_t, oi_gop, oi_gmac);
+      $display("[TB][t=%0d] Tbw_s= %gs Tl_s= %gs Tbw_c= %0d Tl_c= %0d Tmem=%0d Tidle=%0d Tcomp=%0d | %g GOP/s | %g GMAC/s | %g OP/Byte | %g MAC/Byte",
+               t, Tmem_BW_s, Tmem_L_s, Tmem_BW_c, Tmem_L_c, Tmem_c, Tidle_c, Tcomp_c, gops_t, gmacs_t, oi_gop, oi_gmac);
 
       for (int p = 0; p < pe_qnt; p++) begin
         r = $fscanf(exp_file, "%d", exp_vals[p]);

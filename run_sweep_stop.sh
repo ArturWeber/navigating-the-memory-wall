@@ -20,7 +20,7 @@ if kill -0 "$PID" 2>/dev/null; then
 fi
 
 # Step 3: last resort
-if kill -0 "$PID" 2>/dev/null; then
+if kill -0 "$PID" 2>/dev/null; thenpstree -pu $USER | grep common_shell_ex¡
   echo "Still alive. Sending KILL to process group -$PID"
   kill -KILL -- "-$PID" 2>/dev/null || true
 fi
