@@ -16,30 +16,30 @@ TB_SV := tb_pe_artur.sv
 # -------------------------------
 
 # Hardware parameters attached to software
-SIMD ?= 8
+SIMD ?= 16
 DATA_WIDTH ?= 8
 
 # Hardware parameters
-PE           ?= 8
-MAX_CHANNELS ?= 8
+PE           ?= 32
+MAX_CHANNELS ?= 56
 KERNEL_X     ?= 3
 KERNEL_Y     ?= 3
 # Below is the TARGET frequency used for synthesis/STA.
 FCLK_HZ      ?= 7e7
 
 # Software / workload parameters
-PEQNT ?= 1
-CIN   ?= 8
+PEQNT ?= 32
+CIN   ?= 56
 KX    ?= 3
 KY    ?= 3
 
 # Testing parameters
 SEED ?= 3
-NIN  ?= 10
+NIN  ?= 4
 
 # Memory model parameters
 USE_FCLK_SYNTH  ?= True
-MEM_B_GBPS      ?= 1
+MEM_B_GBPS      ?= 100
 MEM_L_S         ?= 2e-9
 
 # SAED14 library

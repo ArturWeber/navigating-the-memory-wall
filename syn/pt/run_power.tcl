@@ -1,3 +1,13 @@
+##############################################################
+#            Projeto de Formatura I - SCC0670                #
+#                                                            #
+#      By: Artur Brenner Weber                               #
+#      email: arturweber@usp.br                              #
+#      Last Update: 26/5/2026                                #
+#                                                            #
+###############################################################
+
+# THE CODE BELOW IS EXPERIMENTAL (YOU HAVE BEEN WARNED PAL)
 # Redirect the command log
 set sh_command_log_file ./work/power_command.log
 

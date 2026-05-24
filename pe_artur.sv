@@ -1,26 +1,38 @@
+// ============================================================
+//            Projeto de Formatura I - SCC0670               
+//                                                           
+//      By: Artur Brenner Weber                              
+//      email: arturweber@usp.br                             
+//      Last Update: 26/5/2026                               
+//                                                           
+//  Original version written by Eduardo Sperle Honorato      
+//  based on work from "On the RTL Implementation of FINN    
+//  Matrix Vector Unit".                                     
+// ============================================================
+
 `timescale 1ns/1ps
 `include "rtl_cfg.svh"
 
 module pe #
 (
-        parameter byte unsigned      DATA_WIDTH = `DATA_WIDTH,                          //data width of the inputs and outputs
-        parameter shortint           MAX_VAL = (1 <<< (DATA_WIDTH-1)) - 1,              //maximum output value based on data width. Used to clip the accumulator output when scaling values
-        parameter shortint           MIN_VAL = -(1 <<< (DATA_WIDTH-1)),                 //minimum output value based on data width. Used to clip the accumulator output when scaling values
-        parameter byte unsigned      ACC_BIT_WIDTH=32,                                  //accumulator data width, set as 32 by default
-        parameter byte unsigned      M_INT_PRECISION=32,                                //precision of the scaler to use when scaling the weights*inputs
-        parameter longint signed     PRECISION_CORRECTION=1 << (M_INT_PRECISION-1),     //precision correction, due to imprecision nature, this is added so rounding values wont do too much damage. It is added to rounded value beforehand to avoid always rounding down with bit-shift. 
-        parameter byte unsigned      TEMP_DATA_WIDTH=ACC_BIT_WIDTH+M_INT_PRECISION+1,   //out_temp data width, out_temp=scale*acc_out+correction
-        parameter byte unsigned      NUM_ACTS_FUN=2,                                    //Number of implemented activation functions: Identity, ReLU, ReLU6 , LeakyReLU
-        parameter shortint unsigned  SIMD = `SIMD,                                      //Number of SIMDs
-        parameter shortint unsigned  PE = `PE,                                          //Number of PEs, i.e, outputs
+        parameter byte unsigned      DATA_WIDTH = `DATA_WIDTH,                          //Data width of inputs and outputs
+        parameter shortint           MAX_VAL = (1 <<< (DATA_WIDTH-1)) - 1,              //Maximum output value based on data width. Used to clip the accumulator output when scaling values
+        parameter shortint           MIN_VAL = -(1 <<< (DATA_WIDTH-1)),                 //Minimum output value based on data width. Used to clip the accumulator output when scaling values
+        parameter byte unsigned      ACC_BIT_WIDTH=32,                                  //Accumulator data width
+        parameter byte unsigned      M_INT_PRECISION=32,                                //Precision of the scaler. Used in scaling
+        parameter longint signed     PRECISION_CORRECTION=1 << (M_INT_PRECISION-1),     //Rounding correction, used to properly round numbers
+        parameter byte unsigned      TEMP_DATA_WIDTH=ACC_BIT_WIDTH+M_INT_PRECISION+1,   //Data width for scaling operation. out_temp= scale * acc_out + correction
+        parameter byte unsigned      NUM_ACTS_FUN=2,                                    //Number of implemented activation functions: Identity, ReLU
+        parameter shortint unsigned  SIMD = `SIMD,                                      //SIMD width, received from testbench
+        parameter shortint unsigned  PE = `PE,                                          //Number of logical PEs, i.e. output channels
         parameter shortint unsigned  MAX_CHANNELS = `MAX_CHANNELS,                      //Maximum number of input channels
-        parameter shortint unsigned  KERNEL_X = `KERNEL_X,                                       
-        parameter shortint unsigned  KERNEL_Y = `KERNEL_Y,
-        parameter int unsigned       MAX_DOT_LANES = MAX_CHANNELS*KERNEL_X*KERNEL_Y,    // maximum ammount of folds, control how many times the computation/weight reading will be done with for the same PE_out, each computation will do SIMDs multiplications and sums and will acumulate till the number specief is given. Basically, this is the maximum number of folds
-        parameter int unsigned       MAX_FOLDS = (MAX_DOT_LANES + SIMD - 1) / SIMD,     // Fold-aligned padded lanes so part-selects are always in range
-        parameter int unsigned       PAD_LANES = MAX_FOLDS * SIMD,                      // Fold-aligned MAX_INPUT_DIM in BITS (this is what all your buses/memories use)
-        parameter int unsigned       MAX_INPUT_DIM = PAD_LANES * DATA_WIDTH,            //MAX_CHANNEL * KERNEL_X * KERNEL_Y, must be at least SIMD size and also a multiple of SIMD!!
-        parameter shortint unsigned  MAX_OUTPUT_DIM = PE*DATA_WIDTH                     //MAX_CHANNEL * DATA_WIDTH
+        parameter shortint unsigned  KERNEL_X = `KERNEL_X,                              //Kernel width         
+        parameter shortint unsigned  KERNEL_Y = `KERNEL_Y,                              //Kernel height
+        parameter int unsigned       MAX_DOT_LANES = MAX_CHANNELS*KERNEL_X*KERNEL_Y,    //Number of values to be multiplied per filter/PE
+        parameter int unsigned       MAX_FOLDS = (MAX_DOT_LANES + SIMD - 1) / SIMD,     //Number of folds needed to process MAX_DOT_LANES with SIMD lanes
+        parameter int unsigned       PAD_LANES = MAX_FOLDS * SIMD,                      //Ammount of numbers in filter/input after padding 
+        parameter int unsigned       MAX_INPUT_DIM = PAD_LANES * DATA_WIDTH,            //Length of each filter/input after padding in bits
+        parameter shortint unsigned  MAX_OUTPUT_DIM = PE*DATA_WIDTH                     //Length of output from all filters in bits 
     )
     (   
     `ifndef SYNTHESIS
@@ -86,10 +98,10 @@ module pe #
 
     
     always_comb begin : state_change_logic
-        next_state = state; // default
+        next_state = state; // state change
         case (state)
             empty: begin
-                if (str_wr) //if start writing is enable then change to writing state
+                if (str_wr) //if start writing is enabled then go to writing state
                     next_state = writing;
             end
 
@@ -99,13 +111,13 @@ module pe #
             end
 
             ready: begin
-                if (inp_rd) //if input ready changes to computing state and also assign the input to the register
+                if (inp_rd) //if input is ready goes to computing state
                     next_state = computing;
             end
 
             computing: begin
                 if (computing_complete) begin
-                    if (inp_rd) //if computing complete and input ready assign the input to register and keeps in the computing state
+                    if (inp_rd) //if computing complete and input ready keeps computing state
                         next_state = computing;
                     else //otherwise go to ready state to wait for the inp_rd signal
                         next_state = ready;
@@ -116,6 +128,7 @@ module pe #
     end
 
     always_ff @(posedge clk) begin: state_change_ff
+        //resets the state to empty when rst_n is low, otherwise updates to the next state
         if (!rst_n)
             state <= empty;
         else
@@ -148,7 +161,7 @@ module pe #
         // Latch new input data only when it is accepted
         else if (((state == ready) && inp_rd) || ((state == computing) && computing_complete && inp_rd)) begin
             inp_data_reg <= inp_data;
-            //clear per-inference state here so out_PE never carries old/X lanes across PEs or inputs
+            // Clear per-inference state here so out_PE never carries old/X lanes across PEs or inputs
             out_PE <= '{default: '0};
             out <= '0;
             out_acc <= '0;
@@ -231,14 +244,14 @@ module pe #
                         logic signed [DATA_WIDTH-1:0] result_dw;
                         logic signed [DATA_WIDTH-1:0] out_PE_next [PE-1:0];
 
-                        // 1. Calculate math instantly
+                        // Calculate math instantly
                         temp_next = ((scales * acc_next) + PRECISION_CORRECTION) >>> M_INT_PRECISION;
 
                     `ifndef SYNTHESIS
                         out_temp <= temp_next;
                     `endif
 
-                        // 3. Clip values
+                        // Clip values
                         if (temp_next > MAX_VAL)
                             result_dw = signed'(MAX_VAL[DATA_WIDTH-1:0]);
                         else if (temp_next < 0 && act_fun_reg == 1)
@@ -248,14 +261,14 @@ module pe #
                         else
                             result_dw = signed'(temp_next[DATA_WIDTH-1:0]);
                         
-                        // 4. Create the "next state" of the entire array instantly
+                        // Create the "next state" of the entire array instantly
                         out_PE_next = out_PE;
                         out_PE_next[PE_ind] = result_dw;
 
-                        // 5. Write back to our internal registers
+                        // Write back to internal registers
                         out_PE <= out_PE_next;
 
-                        // 6. Publish to the 1D output bus cleanly!
+                        // Publish to the 1D output bus cleanly
                         if (PE_ind == pe_qnt_reg - 1) begin
                             // Unconditionally pack the 2D array into the 1D output bus.
                             // Because there are no "if" statements checking variable indexes here,
@@ -315,7 +328,6 @@ module pe #
             check_input_part  <= '0;
             check_current_weights <= 'b0;
             check_output_PE <= 'b0;
-            // check_out_add<= '0;
             check_out_acc <= '0;
             check_out_temp <= '0;
             check_PE_ind <= 0;
@@ -344,7 +356,6 @@ module pe #
             end
             check_computing_complete <= computing_complete;
             check_write_complete <= write_complete;
-            // check_out_add <= out_add;
             check_out_acc <= out_acc;
             check_out_temp <= out_temp;
         end

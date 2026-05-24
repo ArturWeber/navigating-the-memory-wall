@@ -1,16 +1,25 @@
+##############################################################
+#            Projeto de Formatura I - SCC0670                #
+#                                                            #
+#      By: Artur Brenner Weber                               #
+#      email: arturweber@usp.br                              #
+#      Last Update: 26/5/2026                                #
+#                                                            #
+###############################################################
+
 # ==========================================================================
 # SYNOPSYS GARBAGE REDIRECTION
 # ==========================================================================
-# 1. Redirect .mr, .pvl, and .syn files (Presto intermediate files)
+# Redirect .mr, .pvl, and .syn files (Presto intermediate files)
 define_design_lib WORK -path ./work
 
-# 2. Redirect the Setup Verification File (default.svf)
+# Redirect the Setup Verification File (default.svf)
 set_svf ./work/pe.svf
 
-# 3. Redirect the alib-52 folder (Advanced Library Characterization cache)
+# Redirect the alib-52 folder (Advanced Library Characterization cache)
 set alib_library_analysis_path ./work
 
-# 4. Redirect the command.log
+# Redirect the command.log
 set sh_command_log_file ./work/command.log
 # ==========================================================================
 
@@ -19,30 +28,30 @@ set TOP pe
 set LIB_DB $env(SAED14_LIB_DB)
 set CLK_PERIOD_NS $env(CLK_PERIOD_NS)
 
-# Make sure DC can see your generated header and local RTL
+# Make sure DC can see the generated header and local RTL
 set search_path [list . ./work]
 set target_library [list $LIB_DB]
 set link_library "* $target_library"
 
-# Read RTL (your DUT only)
+# Read RTL
 analyze -format sverilog [list pe_artur.sv]
 elaborate $TOP
 current_design $TOP
 link
 
 # ==========================================================================
-# VIRTUAL HIERARCHY GROUPING (Zero RTL Changes)
+# VIRTUAL HIERARCHY GROUPING
 # ==========================================================================
-# 1. Group the Weight Registers
+# Group the Weight Registers
 group -design_name VIRTUAL_WEIGHTS -cell_name BLK_WEIGHTS [get_cells "weights_reg*"]
 
-# 2. Group the Input Data Registers
+# Group the Input Data Registers
 group -design_name VIRTUAL_INPUTS -cell_name BLK_INPUTS [get_cells "inp_data_reg_reg*"]
 
-# 3. Group the Accumulators
+# Group the Accumulators
 group -design_name VIRTUAL_ACCUM -cell_name BLK_ACCUM [get_cells "out_acc_reg*"]
 
-# 4. Group the Output Registers
+# Group the Output Registers
 group -design_name VIRTUAL_OUTPUT -cell_name BLK_OUTPUT [get_cells "out_PE_reg*"]
 # ==========================================================================
 

@@ -1,3 +1,13 @@
+// ==============================================================
+//               Projeto de Formatura I - SCC0670               
+//                                                              
+//       Name: Artur Brenner Weber                              
+//       email: arturweber@usp.br                               
+//       Last Update: 26/5/2026                                 
+//                                                              
+//   Based on Testbench written by Eduardo Sperle Honorato.     
+// ==============================================================
+
 `timescale 1ns/1ps
 `include "rtl_cfg.svh"
 
@@ -112,9 +122,8 @@ module tb_pe;
   // -------------------------------
   // Clock generation
   // -------------------------------
-  // IMPORTANT: In the original TB you had a fixed #1 clock. That makes the DUT
-  // run at 500MHz in simulation regardless of FCLK_HZ. This TB now generates
-  // a clock derived from FCLK_HZ so the cycle counts and the memory-model math
+  // IMPORTANT: This TB generates a clock derived from 
+  // FCLK_HZ so the cycle counts and the memory-model math
   // match the simulated clock.
   //
   // timescale is 1ns/1ps, so:
@@ -458,7 +467,7 @@ module tb_pe;
     DOT_LEN = CIN * KX * KY;
     FOLD_QNT_INT = ceil_div_int(DOT_LEN, SIMD);
 
-    // 1. Initial stable state (Time 0)
+    // Initial stable state (Time 0)
     fold_qnt = FOLD_QNT_INT[$bits(fold_qnt)-1:0];
     pe_qnt   = PEQNT[$bits(pe_qnt)-1:0];
     act_fun  = ACT_FUN_SEL[W_ACT-1:0];
@@ -473,14 +482,14 @@ module tb_pe;
     $display("[TB] CIN=%0d KX=%0d KY=%0d DOT_LEN=%0d SIMD=%0d => fold_qnt=%0d; pe_qnt=%0d; NIN=%0d; VEC_DIR=%s; ACT_FUN_SEL=%0d",
             CIN, KX, KY, DOT_LEN, SIMD, FOLD_QNT_INT, PEQNT, NIN, VEC_DIR, ACT_FUN_SEL);
 
-    // 2. Hold reset for a few cycles to clear all DUT registers
+    // Hold reset for a few cycles to clear all DUT registers
     repeat (2) @(posedge clk);
     rst_n = 1; // Release reset
     
     // Give it one cycle of breathing room after reset
     @(posedge clk);
 
-    // 3. Strobe the Config (Inputs have been stable for 3 cycles now)
+    // Strobe the Config (Inputs have been stable for 3 cycles now)
     set_cfg_n = 0; 
     @(posedge clk); // DUT cleanly samples fold_qnt and pe_qnt right here
     

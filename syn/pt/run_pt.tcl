@@ -1,3 +1,12 @@
+##############################################################
+#            Projeto de Formatura I - SCC0670                #
+#                                                            #
+#      By: Artur Brenner Weber                               #
+#      email: arturweber@usp.br                              #
+#      Last Update: 26/5/2026                                #
+#                                                            #
+###############################################################
+
 # Redirect the PrimeTime command.log
 set sh_command_log_file ./work/pt_command.log
 
@@ -14,12 +23,12 @@ read_verilog work/netlist/pe_mapped.v
 current_design $TOP
 link_design $TOP
 
-# 1. Load initial constraints from Design Compiler
+# Load initial constraints from Design Compiler
 read_sdc work/netlist/pe_mapped.sdc
 file mkdir $env(OUT_DIR)
 
 # ==========================================================================
-# PASS 1: POWER AT TARGET FREQUENCY (As requested in Makefile)
+# PASS 1: POWER AT TARGET FREQUENCY
 # ==========================================================================
 puts "--- PASS 1: Analyzing at Target Frequency ($env(FCLK_HZ) Hz) ---"
 
@@ -41,22 +50,22 @@ report_qor > $env(OUT_DIR)/qor_target_$env(BASE_ID).rpt
 # ==========================================================================
 puts "--- PASS 2: Analyzing at Maximum Reachable Frequency (Fmax) ---"
 
-# 1. Extract the Worst Negative Slack (WNS) from the Target Run
+# Extract the Worst Negative Slack (WNS) from the Target Run
 set wns 0.0
 set timing_paths [get_timing_paths -max_paths 1 -delay_type max]
 if {[sizeof_collection $timing_paths] > 0} {
     set wns [get_attribute $timing_paths slack]
 }
 
-# 2. Calculate the real minimum clock period
+# Calculate the real minimum clock period
 set target_period [expr 1000000000.0 / $env(FCLK_HZ)]
 set real_period [expr {$target_period - $wns}]
 
-# 3. Overwrite the clock with the REAL period for Fmax analysis
+# Overwrite the clock with the REAL period for Fmax analysis
 create_clock -name core_clk -period $real_period [get_ports clk]
 update_timing
 
-# 4. Update power for the new, higher frequency
+# Update power for the new, higher frequency
 update_power
 
 report_power -hierarchy > $env(OUT_DIR)/power_fmax_$env(BASE_ID).rpt

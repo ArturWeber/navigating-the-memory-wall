@@ -1,3 +1,14 @@
+##############################################################
+#            Projeto de Formatura I - SCC0670                #
+#                                                            #
+#      By: Artur Brenner Weber                               #
+#      email: arturweber@usp.br                              #
+#      Last Update: 26/5/2026                                #
+#                                                            #
+#  Written based on a Jupyter Notebook originally by         #
+#  Eduardo Sperle Honorato.                                  #
+##############################################################
+
 import argparse, math, random, os
 import numpy as np
 import torch
@@ -62,7 +73,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--bit_width", type=int, default=8)
-    ap.add_argument("--cin", type=int, default=16)           # input channels (<=16 per your current PE)
+    ap.add_argument("--cin", type=int, default=16)           # input channels
     ap.add_argument("--kx", type=int, default=3)
     ap.add_argument("--ky", type=int, default=3)
     ap.add_argument("--pe_qnt", type=int, default=16)
