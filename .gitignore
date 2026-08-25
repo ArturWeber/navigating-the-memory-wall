@@ -1,6 +1,10 @@
-# =========================
-# Python
-# =========================
+##############################################################
+#            Projeto de Formatura I - SCC0670                #
+#                                                            #
+#      By: Artur Brenner Weber                               #
+#      Last Update: 26/5/2026                                #
+#                                                            #
+##############################################################
 
 # VScode settings
 .vscode/
@@ -13,13 +17,16 @@ __pycache__/
 # C extensions
 *.so
 
+# Mac OS
+.DS_Store
+
 # Distribution / packaging
 .Python
 build/
 develop-eggs/
 dist/
 downloads/
-eggs/
+eggs/o
 .eggs/
 lib/
 lib64/

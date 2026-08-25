@@ -7,7 +7,8 @@
 //                                                           
 //  Original version written by Eduardo Sperle Honorato      
 //  based on work from "On the RTL Implementation of FINN    
-//  Matrix Vector Unit".                                     
+//  Matrix Vector Unit".    
+//  This is the RTL Code describing the Matrix-Vector Unit (MVU)                                 
 // ============================================================
 
 `timescale 1ns/1ps

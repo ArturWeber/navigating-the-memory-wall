@@ -2,11 +2,11 @@
 #            Projeto de Formatura I - SCC0670                #
 #                                                            #
 #      By: Artur Brenner Weber                               #
-#      email: arturweber@usp.br                              #
 #      Last Update: 26/5/2026                                #
 #                                                            #
 #  Written based on a Jupyter Notebook originally by         #
-#  Eduardo Sperle Honorato.                                  #
+#  Eduardo Sperle Honorato. This is a golden model for       #
+#  simulating the ideal hardware behavior.                   #
 ##############################################################
 
 import argparse, math, random, os

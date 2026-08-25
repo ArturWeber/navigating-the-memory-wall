@@ -2,7 +2,6 @@
 #            Projeto de Formatura I - SCC0670                #
 #                                                            #
 #      By: Artur Brenner Weber                               #
-#      email: arturweber@usp.br                              #
 #      Last Update: 26/5/2026                                #
 #                                                            #
 ###############################################################

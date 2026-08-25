@@ -2,10 +2,11 @@
 //               Projeto de Formatura I - SCC0670               
 //                                                              
 //       Name: Artur Brenner Weber                              
-//       email: arturweber@usp.br                               
 //       Last Update: 26/5/2026                                 
 //                                                              
-//   Based on Testbench written by Eduardo Sperle Honorato.     
+//   Based on Testbench written by Eduardo Sperle Honorato.    
+//   This is the Tesbtench used to test the Matrix-Vector Unit (MVU), 
+//   as well as simulate memory behavior and measure performance metrics. 
 // ==============================================================
 
 `timescale 1ns/1ps
