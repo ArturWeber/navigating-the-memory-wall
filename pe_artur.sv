@@ -30,7 +30,7 @@ module pe #
         parameter shortint unsigned  KERNEL_Y = `KERNEL_Y,                              //Kernel height
         parameter int unsigned       MAX_DOT_LANES = MAX_CHANNELS*KERNEL_X*KERNEL_Y,    //Number of values to be multiplied per filter/PE
         parameter int unsigned       MAX_FOLDS = (MAX_DOT_LANES + SIMD - 1) / SIMD,     //Number of folds needed to process MAX_DOT_LANES with SIMD lanes
-        parameter int unsigned       PAD_LANES = MAX_FOLDS * SIMD,                      //Ammount of numbers in filter/input after padding 
+        parameter int unsigned       PAD_LANES = MAX_FOLDS * SIMD,                      //Amount of numbers in filter/input after padding 
         parameter int unsigned       MAX_INPUT_DIM = PAD_LANES * DATA_WIDTH,            //Length of each filter/input after padding in bits
         parameter shortint unsigned  MAX_OUTPUT_DIM = PE*DATA_WIDTH                     //Length of output from all filters in bits 
     )
