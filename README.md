@@ -13,20 +13,22 @@ The thesis and paper investigate when memory bandwidth/latency stop performance 
 ## Purpose / Objectives
 - Build a parameterizable SIMD MVU in SystemVerilog.
 - Verify functional correctness against a Python golden model with quantized integer behavior.
-- Synthesize many hardware geometries (116 configs in 14nm flow) to collect Fmax, area, and power.
-- Project system behavior under memory constraints with an Extended Roofline model.
+- Synthesize many hardware geometries (116 configs in 14nm flow) to collect detailed, specific Fmax, area, and power metrics.
+- Project system behavior under memory bandwidth and latency constraints with an Extended Roofline model.
 - Compare architectural strategies using throughput and energy-delay tradeoffs.
 
-## Main Conclusions (from thesis + SForum paper)
-- Scaling a monolithic datapath increases localized storage/interconnect pressure, reducing frequency scalability and hurting efficiency.
-- Under constrained memory systems, distributed scale-out topologies deliver better system-level efficiency.
+## Main Conclusions
+- Scaling a monolithic datapath (scale-up) increases localized storage/interconnect pressure, reducing frequency scalability and hurting efficiency.
+- Under constrained memory systems, distributed scale-out topologies deliver better system-level efficiency. Scale-up topologies take the lead in masking slow memory in edge cases. 
 - In the reported 25 GB/s case, a distributed setup reaches ~104 GMAC/s with ~82% lower power and ~79% lower area than a larger contiguous scale-up alternative (~32 GMAC/s baseline in the paper comparison).
 - For this architecture, bandwidth is the dominant memory-side limiter in evaluated scenarios; latency is secondary in most tested operating points.
+- SIMD width scaling is not always beneficial to throughput, and will eventually degrade performance and energy efficiency due to datapath congestion.   
+ 
 
 ## Contributors
 - **Artur Brenner Weber** — author and main implementation/research lead
-- **Eduardo Sperle Honorato** — foundational RTL/testbench baseline and methodological basis acknowledged in code/paper
-- **Prof. Dr. Vanderlei Bonato** — advisor/co-author
+- **MSc. Eduardo Sperle Honorato** — foundational RTL/testbench baseline and methodological basis acknowledged in code/paper
+- **Prof. Dr. Vanderlei Bonato** — advisor
 
 ## Repository Structure
 - `/docs` — published research artifacts (thesis + conference paper).
