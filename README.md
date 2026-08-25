@@ -3,19 +3,49 @@
 ## 📄 Publications
 - **Undergraduate Thesis (TCC):** <a href="docs/Full Thesis.pdf">docs/Full Thesis.pdf</a> — also on USP's BDTA *(link pending)*
 - **Conference Paper:** <a href="docs/SForum Paper.pdf">docs/SForum Paper.pdf</a> — SForum, Chip in Sampa 2026 *(proceedings link pending, expected Sept 2026)*
+  
+## Contributors
+- **Artur Brenner Weber** — author and main implementation/research lead
+- **MSc. Eduardo Sperle Honorato** — foundational RTL/testbench baseline and methodological basis acknowledged in code/paper
+- **Prof. Dr. Vanderlei Bonato** — advisor
 
 Design Space Exploration of bandwidth and latency constraints in SIMD neural accelerators using a weight-resident Matrix-Vector Unit (MVU), RTL synthesis, and Roofline-based analysis.
 
 ## Motivation
-Neural accelerators in edge devices face a hard memory wall: arithmetic arrays scale faster than memory delivery can support. To see this in consumer hardware, look at Apple's M-series SoCs. Empirical benchmark data in our research shows that "binned" chips (with disabled GPU cores) often achieve higher *per-core* performance than fully unlocked chips of the same generation because fewer cores are competing for the exact same unified memory bandwidth.
+Neural accelerators in edge devices face a hard memory wall: arithmetic arrays scale faster than memory delivery can support. To see this in consumer hardware, look at Apple's M-series SoCs. Empirical benchmark data (Blender OpenData) in our research shows that "binned" chips (with disabled GPU cores) often achieve higher *per-core* performance than fully unlocked chips of the same generation because fewer cores are competing for the exact same unified memory bandwidth.
 
-This thesis and paper isolate that exact microarchitectural bottleneck at the RTL level. We investigate when memory bandwidth and latency stop performance scaling, and whether **scale-up** (larger monolithic arrays) or **scale-out** (multiple smaller nodes) is better under realistic edge constraints.
+| Architecture Variant | GPU Cores | Total BW (GB/s) | BW / Core (GB/s) | Perf. / Core (Median Score) |
+| :--- | :---: | :---: | :---: | :---: |
+| M3 (Binned) | 8 | 100 | 12.50 | 109.45 |
+| M3 (Fully-enabled) | 10 | 100 | 10.00 (-20.0%) | 92.17 (-15.8%) |
+| M4 (Binned) | 8 | 120 | 15.00 | 134.07 |
+| M4 (Fully-enabled) | 10 | 120 | 12.00 (-20.0%) | 108.79 (-18.9%) |
+| M5 (Binned) | 8 | 150 | 18.75 | 233.06 |
+| M5 (Fully-enabled) | 10 | 150 | 15.00 (-20.0%) | 177.06 (-24.0%) |
+
+This thesis and paper isolate that exact microarchitectural bottleneck at the RTL level for neural network accelerators. We investigate when memory bandwidth and latency stop performance scaling, and whether **scale-up** (larger monolithic arrays) or **scale-out** (multiple smaller nodes) is better under realistic edge constraints.
 
 ## Purpose / Objectives
-- Build a parameterizable SIMD MVU in SystemVerilog.
+- Build a parameterizable SIMD MVU in SystemVerilog:
+
+<p align="center">
+  <img width="400" alt="Macro" src="https://github.com/user-attachments/assets/b7ee8d5e-19e6-413f-b3f5-351ed32a2556" />
+</p>
+
+<p align="center">
+  <img width="400" alt="mvu" src="https://github.com/user-attachments/assets/bae154e9-44ea-470d-af64-007ab2a9a025" />
+</p>
+
 - Verify functional correctness against a Python golden model with quantized integer behavior.
-- Synthesize many hardware geometries (116 configs in 14nm flow) to collect detailed, specific Fmax, area, and power metrics.
+- Synthesize many hardware geometries (116 configs in 14nm flow) to collect detailed, specific Fmax, area, and power metrics for each of them.
+
 - Project system behavior under memory bandwidth and latency constraints with an Extended Roofline model.
+
+Example:
+<p align="center">
+  <img width="400" alt="roofline" src="https://github.com/user-attachments/assets/71dbeb38-c910-48a6-a4c2-56bef71de0d5" />
+</p>
+
 - Compare architectural strategies using throughput and energy-delay tradeoffs.
 
 ## Main Conclusions
@@ -35,11 +65,6 @@ To strictly stress-test weight residency limits, this MVU stores neural network 
 - Synthesis used a static 70 MHz target for all configurations; reported higher Fmax values reflect post-synthesis slack recovery, not iterative per-configuration max-frequency sweeps.
 - Datapath execution is dense (no zero-skipping sparsity control), so all operands are processed.
 - Dynamic power estimation used a uniform statistical activity model (toggle_rate = 0.1, static probability 0.5), not workload-specific SAIF/VCD switching traces.
-
-## Contributors
-- **Artur Brenner Weber** — author and main implementation/research lead
-- **MSc. Eduardo Sperle Honorato** — foundational RTL/testbench baseline and methodological basis acknowledged in code/paper
-- **Prof. Dr. Vanderlei Bonato** — advisor
 
 ## Research context and infrastructure
 This work was developed in Brazilian academic research context (USP) and explicitly used infrastructure from UFRGS: the CADMicro facility (server infrastructure, EDA tool access, and PDK support) that enabled the synthesis and physical characterization runs.
@@ -98,12 +123,12 @@ pip install -r requirements.txt
 
 Generate vectors through the Makefile pipeline:
 ```bash
-make vectors SIMD=16 CIN=56 KX=3 KY=3 PEQNT=32 NIN=1000 SEED=3
+make vectors SIMD=128 CIN=14 KX=3 KY=3 PEQNT=8 NIN=1000 SEED=3
 ```
 
 ### 2) Functional simulation (RTL vs golden model)
 ```bash
-make sim SIMD=16 PE=32 MAX_CHANNELS=56 FCLK_HZ=7e7 MEM_B_GBPS=100 MEM_L_S=2e-9
+make sim SIMD=128 PE=8 MAX_CHANNELS=14 FCLK_HZ=254e6 MEM_B_GBPS=25 MEM_L_S=1e-9
 ```
 
 ### 3) Synthesis / timing / power (Synopsys)
@@ -137,3 +162,4 @@ python analysis/roofline_sforum.py --simd 128 --maxch 56 --pe 8 --bw 25 --lat 1e
 ## Notes
 - `run_sweep_launch.sh` expects a `run_sweep.sh` orchestrator script in the repository root.
 - Results are written under `results/<hardware_id>/...`, while temporary build artifacts go to `work/`.
+- VCD Dump for power analysis was implemented in an early beta stage, but was not used in establishing the power figures in the paper/thesis. 
