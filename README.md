@@ -1,5 +1,7 @@
 # Navigating the Memory Wall
 
+Design Space Exploration of bandwidth and latency constraints in SIMD neural accelerators using a weight-resident Matrix-Vector Unit (MVU), RTL synthesis, and Roofline-based analysis.
+
 ## 📄 Publications
 - **Undergraduate Thesis (TCC):** <a href="docs/Full Thesis.pdf">docs/Full Thesis.pdf</a> — also on USP's BDTA *(link pending)*
 - **Conference Paper:** <a href="docs/SForum Paper.pdf">docs/SForum Paper.pdf</a> — SForum, Chip in Sampa 2026 *(proceedings link pending, expected Sept 2026)*
@@ -9,43 +11,54 @@
 - **MSc. Eduardo Sperle Honorato** — foundational RTL/testbench baseline and methodological basis acknowledged in code/paper
 - **Prof. Dr. Vanderlei Bonato** — advisor
 
-Design Space Exploration of bandwidth and latency constraints in SIMD neural accelerators using a weight-resident Matrix-Vector Unit (MVU), RTL synthesis, and Roofline-based analysis.
+## Key Results at a Glance
 
-## Motivation
-Neural accelerators in edge devices face a hard memory wall: arithmetic arrays scale faster than memory delivery can support. To see this in consumer hardware, look at Apple's M-series SoCs. Empirical benchmark data (Blender OpenData) in our research shows that "binned" chips (with disabled GPU cores) often achieve higher *per-core* performance than fully unlocked chips of the same generation because fewer cores are competing for the exact same unified memory bandwidth.
+| Metric | Baseline Scale-Up Node ($PE=64, \text{SIMD}=512$) | Winning Balanced Node ($PE=8, \text{SIMD}=128$) | Distributed Scale-Out ($4\times \text{Balanced Nodes}$) |
+| :--- | :---: | :---: | :---: |
+| **Clock Frequency ($F_{max}$)** | 64.23 MHz | 254.45 MHz | 254.45 MHz |
+| **Throughput (at 25 GB/s)** | 31.89 GMAC/s | 26.06 GMAC/s | 104.24 GMAC/s (+227%) |
+| **Active Power** | 1,790.00 µW | 82.60 µW | 330.40 µW (-82%) |
+| **Silicon Area (14nm)** | 489,212 µm² | 25,813 µm² | 103,252 µm² (-79%) |
+| **Energy-Delay Product (EDP)** | $17.59 \times 10^{-13}\text{ J}\cdot\text{s}$ | $1.22 \times 10^{-13}\text{ J}\cdot\text{s}$ | $0.30 \times 10^{-13}\text{ J}\cdot\text{s}$ (58× better) |
+
+## Motivation: The Empirical Memory Wall
+
+Arithmetic arrays scale faster than memory hierarchies can deliver operands. In edge SoCs, this establishes data delivery—not compute density—as the primary bottleneck.
+
+We observe this directly in commercial edge hardware. Benchmarking **Apple Silicon SoCs (M1–M5)** on memory-bound workloads (Blender OpenData) reveals that **binned chips (with deactivated GPU cores) consistently achieve higher per-core performance** than fully unlocked variants because fewer cores contend for the same unified memory bandwidth:
 
 | Architecture Variant | GPU Cores | Total BW (GB/s) | BW / Core (GB/s) | Perf. / Core (Median Score) |
 | :--- | :---: | :---: | :---: | :---: |
-| M3 (Binned) | 8 | 100 | 12.50 | 109.45 |
-| M3 (Fully-enabled) | 10 | 100 | 10.00 (-20.0%) | 92.17 (-15.8%) |
-| M4 (Binned) | 8 | 120 | 15.00 | 134.07 |
-| M4 (Fully-enabled) | 10 | 120 | 12.00 (-20.0%) | 108.79 (-18.9%) |
-| M5 (Binned) | 8 | 150 | 18.75 | 233.06 |
-| M5 (Fully-enabled) | 10 | 150 | 15.00 (-20.0%) | 177.06 (-24.0%) |
+| **M3 (Binned)** | 8 | 100 | 12.50 | **109.45** |
+| **M3 (Fully-enabled)** | 10 | 100 | 10.00 (-20.0%) | **92.17 (-15.8%)** |
+| **M4 (Binned)** | 8 | 120 | 15.00 | **134.07** |
+| **M4 (Fully-enabled)** | 10 | 120 | 12.00 (-20.0%) | **108.79 (-18.9%)** |
+| **M5 (Binned)** | 8 | 150 | 18.75 | **233.06** |
+| **M5 (Fully-enabled)** | 10 | 150 | 15.00 (-20.0%) | **177.06 (-24.0%)** |
 
-This thesis and paper isolate that exact microarchitectural bottleneck at the RTL level for neural network accelerators. We investigate when memory bandwidth and latency stop performance scaling, and whether **scale-up** (larger monolithic arrays) or **scale-out** (multiple smaller nodes) is better under realistic edge constraints.
+This research isolates this exact microarchitectural bottleneck at the RTL level for neural accelerators, determining whether **scale-up** (monolithic arrays) or **scale-out** (distributed smaller nodes) is superior under realistic memory constraints.
+
+## Architecture Overview
+
+<p align="center">
+  <img width="500" alt="System Level Architecture" src="https://github.com/user-attachments/assets/b7ee8d5e-19e6-413f-b3f5-351ed32a2556" />
+  <br>
+  <em>Figure 1: Macroscopic streaming view of cascaded MVU layers.</em>
+</p>
+
+The core compute engine is a parameterizable **Matrix-Vector Unit (MVU)** implementing a temporally folded SIMD datapath with per-layer fixed-point integer requantization (Q32 $\to$ INT8) and integrated clipping/activation logic (ReLU / Identity):
+
+<p align="center">
+  <img width="500" alt="MVU Microarchitecture" src="https://github.com/user-attachments/assets/bae154e9-44ea-470d-af64-007ab2a9a025" />
+  <br>
+  <em>Figure 2: Internal microarchitecture of the temporally folded MVU datapath.</em>
+</p>
 
 ## Purpose / Objectives
 - Build a parameterizable SIMD MVU in SystemVerilog:
-
-<p align="center">
-  <img width="400" alt="Macro" src="https://github.com/user-attachments/assets/b7ee8d5e-19e6-413f-b3f5-351ed32a2556" />
-</p>
-
-<p align="center">
-  <img width="400" alt="mvu" src="https://github.com/user-attachments/assets/bae154e9-44ea-470d-af64-007ab2a9a025" />
-</p>
-
 - Verify functional correctness against a Python golden model with quantized integer behavior.
 - Synthesize many hardware geometries (116 configs in 14nm flow) to collect detailed, specific Fmax, area, and power metrics for each of them.
-
 - Project system behavior under memory bandwidth and latency constraints with an Extended Roofline model.
-
-Example:
-<p align="center">
-  <img width="400" alt="roofline" src="https://github.com/user-attachments/assets/71dbeb38-c910-48a6-a4c2-56bef71de0d5" />
-</p>
-
 - Compare architectural strategies using throughput and energy-delay tradeoffs.
 
 ## Main Conclusions
@@ -53,6 +66,12 @@ Example:
 - Under constrained memory systems, distributed scale-out topologies deliver better system-level efficiency. Scale-up topologies take the lead in masking slow memory in edge cases.
 - **Winning balanced node:** **PE=8, SIMD=128**.
 - **Measured result:** **26.06 GMAC/s @ 254.45 MHz**, **82.60 µW**, **~25,813 µm²**.
+<p align="center">
+  <img width="500" alt="Extended Roofline Model" src="https://github.com/user-attachments/assets/76600fc8-ba69-411f-82c9-35cffb7544a7" />
+  <br>
+  <em>Figure 3: Extended Roofline Model demonstrating the Balanced Node (PE=8, SIMD=128) hitting the compute roof under memory constraints.</em>
+</p>
+
 - This node gave the best global efficiency balance (throughput vs silicon footprint vs power), while denser monolithic designs increased raw compute ceiling but degraded efficiency due to storage/interconnect overhead.
 - In the reported 25 GB/s case, a distributed setup reaches ~104 GMAC/s with ~82% lower power and ~79% lower area than a larger contiguous scale-up alternative (~32 GMAC/s baseline in the paper comparison).
 - For this architecture, bandwidth is the dominant memory-side limiter in evaluated scenarios; latency is secondary in most tested operating points.
@@ -141,7 +160,7 @@ Then run:
 ```bash
 make synth   # Design Compiler netlist + area/timing/power-est reports
 make sta     # PrimeTime timing / Fmax derivation
-make power   # PrimeTime power using SAIF (depends on sim -> saif)
+make power   # (THIS IS IN ALPHA!!) PrimeTime power using SAIF (depends on sim -> saif)
 ```
 
 ### 4) Build aggregated dataset and plots
