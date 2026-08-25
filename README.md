@@ -7,8 +7,9 @@
 Design Space Exploration of bandwidth and latency constraints in SIMD neural accelerators using a weight-resident Matrix-Vector Unit (MVU), RTL synthesis, and Roofline-based analysis.
 
 ## Motivation
-Neural accelerators in edge devices face a hard memory wall: arithmetic arrays can scale faster than memory delivery.  
-The thesis and paper investigate when memory bandwidth/latency stop performance scaling, and whether **scale-up** (larger monolithic arrays) or **scale-out** (multiple smaller nodes) is better under realistic edge constraints.
+Neural accelerators in edge devices face a hard memory wall: arithmetic arrays scale faster than memory delivery can support. To see this in consumer hardware, look at Apple's M-series SoCs. Empirical benchmark data in our research shows that "binned" chips (with disabled GPU cores) often achieve higher *per-core* performance than fully unlocked chips of the same generation because fewer cores are competing for the exact same unified memory bandwidth.
+
+This thesis and paper isolate that exact microarchitectural bottleneck at the RTL level. We investigate when memory bandwidth and latency stop performance scaling, and whether **scale-up** (larger monolithic arrays) or **scale-out** (multiple smaller nodes) is better under realistic edge constraints.
 
 ## Purpose / Objectives
 - Build a parameterizable SIMD MVU in SystemVerilog.
@@ -19,16 +20,29 @@ The thesis and paper investigate when memory bandwidth/latency stop performance 
 
 ## Main Conclusions
 - Scaling a monolithic datapath (scale-up) increases localized storage/interconnect pressure, reducing frequency scalability and hurting efficiency.
-- Under constrained memory systems, distributed scale-out topologies deliver better system-level efficiency. Scale-up topologies take the lead in masking slow memory in edge cases. 
+- Under constrained memory systems, distributed scale-out topologies deliver better system-level efficiency. Scale-up topologies take the lead in masking slow memory in edge cases.
+- **Winning balanced node:** **PE=8, SIMD=128**.
+- **Measured result:** **26.06 GMAC/s @ 254.45 MHz**, **82.60 µW**, **~25,813 µm²**.
+- This node gave the best global efficiency balance (throughput vs silicon footprint vs power), while denser monolithic designs increased raw compute ceiling but degraded efficiency due to storage/interconnect overhead.
 - In the reported 25 GB/s case, a distributed setup reaches ~104 GMAC/s with ~82% lower power and ~79% lower area than a larger contiguous scale-up alternative (~32 GMAC/s baseline in the paper comparison).
 - For this architecture, bandwidth is the dominant memory-side limiter in evaluated scenarios; latency is secondary in most tested operating points.
 - SIMD width scaling is not always beneficial to throughput, and will eventually degrade performance and energy efficiency due to datapath congestion.   
- 
+
+### Implementation caveats
+To strictly stress-test weight residency limits, this MVU stores neural network parameters in fully unrolled discrete logic registers (flip-flops) instead of hierarchical SRAM/BRAM storage. In dense configurations, this parameter storage dominates the footprint (occupying up to 72.1% of total silicon area), which is the one of the main architectural drivers behind the scale-up failure.
+
+### Methodological boundaries
+- Synthesis used a static 70 MHz target for all configurations; reported higher Fmax values reflect post-synthesis slack recovery, not iterative per-configuration max-frequency sweeps.
+- Datapath execution is dense (no zero-skipping sparsity control), so all operands are processed.
+- Dynamic power estimation used a uniform statistical activity model (toggle_rate = 0.1, static probability 0.5), not workload-specific SAIF/VCD switching traces.
 
 ## Contributors
 - **Artur Brenner Weber** — author and main implementation/research lead
 - **MSc. Eduardo Sperle Honorato** — foundational RTL/testbench baseline and methodological basis acknowledged in code/paper
 - **Prof. Dr. Vanderlei Bonato** — advisor
+
+## Research context and infrastructure
+This work was developed in Brazilian academic research context (USP) and explicitly used infrastructure from UFRGS: the CADMicro facility (server infrastructure, EDA tool access, and PDK support) that enabled the synthesis and physical characterization runs.
 
 ## Repository Structure
 - `/docs` — published research artifacts (thesis + conference paper).
