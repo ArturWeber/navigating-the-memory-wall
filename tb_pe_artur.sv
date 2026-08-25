@@ -5,7 +5,7 @@
 //       Last Update: 26/5/2026                                 
 //                                                              
 //   Based on Testbench written by Eduardo Sperle Honorato.    
-//   This is the Tesbtench used to test the Matrix-Vector Unit (MVU), 
+//   This is the Testbench used to test the Matrix-Vector Unit (MVU), 
 //   as well as simulate memory behavior and measure performance metrics. 
 // ==============================================================
 
