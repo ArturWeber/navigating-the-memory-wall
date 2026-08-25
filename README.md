@@ -78,7 +78,7 @@ The core compute engine is a parameterizable **Matrix-Vector Unit (MVU)** implem
 - SIMD width scaling is not always beneficial to throughput, and will eventually degrade performance and energy efficiency due to datapath congestion.   
 
 ### Implementation caveats
-To strictly stress-test weight residency limits, this MVU stores neural network parameters in fully unrolled discrete logic registers (flip-flops) instead of hierarchical SRAM/BRAM storage. In dense configurations, this parameter storage dominates the footprint (occupying up to 72.1% of total silicon area), which is the one of the main architectural drivers behind the scale-up failure.
+To strictly stress-test weight residency limits, this MVU stores neural network parameters in fully unrolled discrete logic registers (flip-flops) instead of hierarchical SRAM/BRAM storage. In dense configurations, this parameter storage dominates the footprint (occupying up to 72.1% of total silicon area), that being one of the main architectural drivers behind the scale-up failure.
 
 ### Methodological boundaries
 - Synthesis used a static 70 MHz target for all configurations; reported higher Fmax values reflect post-synthesis slack recovery, not iterative per-configuration max-frequency sweeps.
