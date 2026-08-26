@@ -69,7 +69,7 @@ The core compute engine is a parameterizable **Matrix-Vector Unit (MVU)** implem
 <p align="center">
   <img width="500" alt="Extended Roofline Model" src="https://github.com/user-attachments/assets/76600fc8-ba69-411f-82c9-35cffb7544a7" />
   <br>
-  <em>Figure 3: Extended Roofline Model demonstrating the Balanced Node (PE=8, SIMD=128) hitting the compute roof under memory constraints.</em>
+  <em>Figure 3: Extended Roofline Model demonstrating the Balanced Node (PE=8, SIMD=128) hitting the compute roof under BW=6GB/s, L=10ns memory constraints.</em>
 </p>
 
 - This node gave the best global efficiency balance (throughput vs silicon footprint vs power), while denser monolithic designs increased raw compute ceiling but degraded efficiency due to storage/interconnect overhead.
