@@ -1,11 +1,16 @@
 # Navigating the Memory Wall
 
+
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![SystemVerilog](https://img.shields.io/badge/RTL-SystemVerilog-orange.svg)
+![Python](https://img.shields.io/badge/analysis-Python-blue.svg)
+
 Design Space Exploration of bandwidth and latency constraints in SIMD neural accelerators using a weight-resident Matrix-Vector Unit (MVU), RTL synthesis, and Roofline-based analysis.
 
 ## 📄 Publications
 - **Undergraduate Thesis (TCC):** <a href="docs/Full Thesis.pdf">docs/Full Thesis.pdf</a> — also on USP's BDTA *(link pending)*
 - **Conference Paper:** <a href="docs/SForum Paper.pdf">docs/SForum Paper.pdf</a> — SForum, Chip in Sampa 2026 *(proceedings link pending, expected Sept 2026)*
-  
+
 ## Contributors
 - **Artur Brenner Weber** — author and main implementation/research lead
 - **MSc. Eduardo Sperle Honorato** — foundational RTL/testbench baseline and methodological basis acknowledged in code/paper
@@ -37,6 +42,8 @@ We observe this directly in commercial edge hardware. Benchmarking **Apple Silic
 | **M5 (Fully-enabled)** | 10 | 150 | 15.00 (-20.0%) | **177.06 (-24.0%)** |
 
 This research isolates this exact microarchitectural bottleneck at the RTL level for neural accelerators, determining whether **scale-up** (monolithic arrays) or **scale-out** (distributed smaller nodes) is superior under realistic memory constraints.
+
+**What's different here:** most roofline-based DSE studies on neural accelerators rely on analytical or simulated area/power estimates. Every number in this repo — Fmax, area, power — comes from physically synthesizing 116 distinct hardware configurations through a commercial 14nm FinFET flow (Synopsys Design Compiler + PrimeTime), not from theoretical models.
 
 ## Architecture Overview
 
@@ -84,6 +91,9 @@ To strictly stress-test weight residency limits, this MVU stores neural network 
 - Synthesis used a static 70 MHz target for all configurations; reported higher Fmax values reflect post-synthesis slack recovery, not iterative per-configuration max-frequency sweeps.
 - Datapath execution is dense (no zero-skipping sparsity control), so all operands are processed.
 - Dynamic power estimation used a uniform statistical activity model (toggle_rate = 0.1, static probability 0.5), not workload-specific SAIF/VCD switching traces.
+
+## Citing this work
+This code is released under the MIT License — use it, modify it, redistribute it freely. If you use this code, data, or findings in academic or derivative work, please cite the paper and/or thesis. 
 
 ## Research context and infrastructure
 This work was developed in Brazilian academic research context (USP) and explicitly used infrastructure from UFRGS: the CADMicro facility (server infrastructure, EDA tool access, and PDK support) that enabled the synthesis and physical characterization runs.
@@ -134,7 +144,7 @@ This work was developed in Brazilian academic research context (USP) and explici
 
 ### 1) Python environment + vector generation
 ```bash
-cd /home/runner/work/navigating-the-memory-wall/navigating-the-memory-wall
+cd navigating-the-memory-wall
 python3.12 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
