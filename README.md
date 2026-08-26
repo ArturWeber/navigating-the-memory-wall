@@ -13,7 +13,7 @@ Design Space Exploration of bandwidth and latency constraints in SIMD neural acc
 
 ## Contributors
 - **Artur Brenner Weber** — author and main implementation/research lead
-- **MSc. Eduardo Sperle Honorato** — foundational RTL/testbench baseline and methodological basis acknowledged in code/paper
+- **MSc. Eduardo Sperle Honorato** — co-author; contributed the original RTL/testbench code concept this project was built on (v0)
 - **Prof. Dr. Vanderlei Bonato** — advisor
 
 ## Key Results at a Glance
